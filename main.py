@@ -13,6 +13,7 @@ from sqlite3 import Error
 import os
 import ntpath
 import shutil
+import zipfile
 
 
 class SongStorage(Tk):  # The GUI class responsible for showing the interface to the user
@@ -56,8 +57,14 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         # This label will display when the user attempts to add an already-existent media file
         self.already_exists = Label(self.folder_frame, text="")
 
+        self.button_frame = Frame()
+
         # The button that allows the user to add media files from other sources
-        self.add_music_button = ttk.Button(self.media_frame, text="Add Media...", command=self.add_media_dialog)
+        self.add_music_button = ttk.Button(self.button_frame, text="Add Media...", command=self.add_media_dialog)
+
+        # The button that allows the user to create a custom Savelist
+        self.create_savelist_button = ttk.Button(self.button_frame, text="Create Savelist...",
+                                                 command=self.create_savelist)
 
         # We are storing the length of the longest item in the media list in order to be able to modify the size of the
         # scrollable area (if necessary).
@@ -129,7 +136,9 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         self.path_frame_parent.pack(side=LEFT)
 
-        self.media_frame.pack(side=LEFT)
+        self.media_frame.pack()
+
+        self.button_frame.pack()
 
         self.header.pack(pady=10)
 
@@ -174,7 +183,8 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         self.folder_scan()
 
-        self.add_music_button.pack(pady=20)
+        self.add_music_button.grid(row=0, column=0, padx=10, pady=20)
+        self.create_savelist_button.grid(row=0, column=1, padx=10, pady=20)
 
     def add_media(self, file, mode):
 
@@ -347,8 +357,14 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         # Refreshing the add button
         self.add_music_button.destroy()
-        self.add_music_button = ttk.Button(self.media_frame, text="Add Media...", command=self.add_media_dialog)
-        self.add_music_button.pack(pady=20)
+        self.add_music_button = ttk.Button(self.button_frame, text="Add Media...", command=self.add_media_dialog)
+        self.add_music_button.grid(row=0, column=0, padx=10, pady=20)
+
+        # Refreshing the savelist button
+        self.create_savelist_button.destroy()
+        self.create_savelist_button = ttk.Button(self.button_frame, text="Create Savelist...",
+                                                 command=self.create_savelist)
+        self.create_savelist_button.grid(row=0, column=1, padx=10, pady=20)
 
         cursor.close()
 
@@ -782,6 +798,121 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
             # Whenever a media item is added, the user is automatically prompted to configure its metadata
             self.configure_media(os.path.basename(file), full_path)
+
+    def create_savelist(self):
+        savelist_window = Toplevel()
+        savelist_window.title("Create Savelist...")
+        savelist_window.grab_set()
+
+        savelist_label = Label(savelist_window, text="Create a custom Savelist based on certain criteria.\n "
+                                                     "Leave any field empty to ignore that criterion.\n "
+                                                     "The resulted Savelist will be generated inside the media folder.")
+        savelist_label.pack(padx=10, pady=10)
+
+        savelist_frame = Frame(savelist_window)
+        savelist_frame.pack()
+
+        title_contains_label = Label(savelist_frame, text="Title contains:")
+        title_contains_label.grid(row=0, column=0, padx=10, pady=10)
+
+        title_contains_entry = ttk.Entry(savelist_frame)
+        title_contains_entry.grid(row=0, column=1)
+
+        artist_name_label = Label(savelist_frame, text="Artist name:")
+        artist_name_label.grid(row=1, column=0, padx=10, pady=10)
+
+        artist_name_entry = ttk.Entry(savelist_frame)
+        artist_name_entry.grid(row=1, column=1)
+
+        album_name_label = Label(savelist_frame, text="Album name:")
+        album_name_label.grid(row=2, column=0, padx=10, pady=10)
+
+        album_name_entry = ttk.Entry(savelist_frame)
+        album_name_entry.grid(row=2, column=1)
+
+        release_year_label = Label(savelist_frame, text="Release year:")
+        release_year_label.grid(row=3, column=0, padx=10, pady=10)
+
+        release_year_entry = ttk.Entry(savelist_frame)
+        release_year_entry.grid(row=3, column=1)
+
+        tags_label = Label(savelist_frame, text="Tags:")
+        tags_label.grid(row=4, column=0, padx=10, pady=10)
+
+        tags_entry = ttk.Entry(savelist_frame)
+        tags_entry.grid(row=4, column=1)
+
+        archive_name_label = Label(savelist_frame, text="Name of the generated archive:")
+        archive_name_label.grid(row=5, column=0, padx=10, pady=10)
+
+        archive_name_entry = ttk.Entry(savelist_frame)
+        archive_name_entry.grid(row=5, column=1)
+
+        button_frame = Frame(savelist_window)
+        button_frame.pack()
+
+        generate_button = ttk.Button(button_frame, text="Generate Savelist", command=lambda
+                                     title_value=title_contains_entry, artist_value=artist_name_entry,
+                                     album_value=album_name_entry, release_year_value=release_year_entry,
+                                     tags_value=tags_entry, archive_value=archive_name_entry, x_window=savelist_window:
+                                     self.generate_savelist(title_value, artist_value, album_value, release_year_value,
+                                                            tags_value, archive_value, x_window))
+        generate_button.grid(row=6, column=0, padx=10, pady=10)
+
+        cancel_button = ttk.Button(button_frame, text="Cancel", command=savelist_window.destroy)
+        cancel_button.grid(row=6, column=1, padx=10, pady=10)
+
+        savelist_window.mainloop()
+
+    def generate_savelist(self, title, artist, album, release_year, tags, archive, window):
+
+        cursor = self.connection.cursor()
+
+        with zipfile.ZipFile(self.media_folder + "/" + archive.get() + '.zip', 'w') as savelist_zip:
+
+            if title.get() != "":
+                cursor.execute("SELECT full_path FROM media WHERE CHARINDEX(" + "\"" + title.get() + "\"" +
+                               ", title) > 0")
+                valid_title_files = cursor.fetchall()
+
+                for i in valid_title_files:
+                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
+                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+
+            if artist.get() != "":
+                cursor.execute("SELECT full_path FROM media WHERE artist = " + "\"" + artist.get() + "\"")
+                valid_artist_files = cursor.fetchall()
+
+                for i in valid_artist_files:
+                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
+                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+
+            if album.get() != "":
+                cursor.execute("SELECT full_path FROM media WHERE album = " + "\"" + album.get() + "\"")
+                valid_album_files = cursor.fetchall()
+
+                for i in valid_album_files:
+                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
+                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+
+            if release_year.get() != "":
+                cursor.execute("SELECT full_path FROM media WHERE release_date = " + "\"" + release_year.get() + "\"")
+                valid_release_year_files = cursor.fetchall()
+
+                for i in valid_release_year_files:
+                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
+                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+
+            if tags.get() != "":
+                cursor.execute("SELECT full_path FROM media WHERE CHARINDEX(" + "\"" + tags.get() + "\"" +
+                               ", tags) > 0")
+                valid_tags_files = cursor.fetchall()
+
+                for i in valid_tags_files:
+                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
+                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+
+        window.destroy()
 
 
 if __name__ == "__main__":
