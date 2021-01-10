@@ -29,7 +29,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         # Variable tasked with managing the database connected to the application
         self.connection = self.connect_to_database()
         
-        # Declaring the variables the GUI will use
+        """Declaring the variables the GUI will use"""
         self.init_frame = Frame()  # The main frame of the application
         self.folder_locator = Label(self.init_frame,
                                     text="Please choose the folder where you'd like to store your media: ")
@@ -43,10 +43,11 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         self.media_folder_label = Label(self.folder_frame, textvariable=self.var)
 
         # The button that allows the user to change the currently selected media folder
-        self.change_folder_button = Button(self.folder_frame, text="Change...", command=self.folder_selector)
+        self.change_folder_button = ttk.Button(self.folder_frame, text="Change...", command=self.folder_selector)
 
         # The frame that will display all the media content available inside the media folder
         self.media_frame = Frame()
+        self.canvas = Canvas()
 
         self.path_frame_parent = Frame(self.media_frame, relief=GROOVE, width=500, height=100, bd=1)
 
@@ -54,6 +55,9 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         # This label will display when the user attempts to add an already-existent media file
         self.already_exists = Label(self.folder_frame, text="")
+
+        # The button that allows the user to add media files from other sources
+        self.add_music_button = ttk.Button(self.media_frame, text="Add Media...", command=self.add_media_dialog)
 
         # We are storing the length of the longest item in the media list in order to be able to modify the size of the
         # scrollable area (if necessary).
@@ -63,9 +67,10 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         self.process_widgets()
 
-        self.folder_scan()
+        self.load_interface()
 
-    def connect_to_database(self):
+    @staticmethod
+    def connect_to_database():
 
         """
             This method attempts a connection to the application's database, returning the connection if successful
@@ -120,13 +125,13 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         self.folder_button.pack(side=LEFT)
 
-        self.media_folder_label.pack(side=LEFT)
+        self.media_folder_label.pack(side=LEFT, padx=10, pady=10)
 
         self.path_frame_parent.pack(side=LEFT)
 
         self.media_frame.pack(side=LEFT)
 
-        self.header.pack()
+        self.header.pack(pady=10)
 
     def folder_scan(self):
 
@@ -156,6 +161,20 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         self.library_items = []
         self.path_frame_parent.destroy()
         self.display_media()
+
+    def load_interface(self):
+
+        """
+            Loads the GUI of the application.
+
+            :return: None
+        """
+
+        self.display_media_folder()
+
+        self.folder_scan()
+
+        self.add_music_button.pack(pady=20)
 
     def add_media(self, file, mode):
 
@@ -207,10 +226,10 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
             result = int(str(cursor.fetchone())[1])
 
             if not result:  # The selected file is not present in the database; the program will attempt to add it
-                sql_command = ''' INSERT INTO media(title, artist, album, release_date, full_path)
-                                VALUES (?, ?, ?, ?, ?) '''
+                sql_command = ''' INSERT INTO media(title, artist, album, release_date, tags, full_path)
+                                VALUES (?, ?, ?, ?, ?, ?) '''
 
-                values = (assumed_title, assumed_artist, '', '', full_path)
+                values = (assumed_title, assumed_artist, '', '', '', full_path)
 
                 cursor.execute(sql_command, values)
 
@@ -229,7 +248,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         """
             The core of the program's GUI.
-            Displays the entire list of media to the user.
+            Displays the entire list of media files to the user.
 
             :return: None
         """
@@ -274,12 +293,12 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
             # Checking if the currently selected item from the database is located in the media folder
             if (os.path.dirname(entry_path[0])) == self.config['MEDIA FOLDER']['folder']:
-                # Adding the media item title to the media list
 
+                # Adding the media item title to the media list
                 cursor.execute("SELECT mode FROM media WHERE id = " + str(i + 1))
                 mode = cursor.fetchone()
 
-                if int(mode[0]):
+                if int(mode[0]):  # Displaying the media label using its metadata
                     self.library_items.append(Label(path_frame_child, textvariable=display_entry))
                     self.library_items[-1].grid(row=index, column=1)
 
@@ -287,7 +306,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
                     if current_item_length > self.longest_item_length:
                         self.longest_item_length = current_item_length
 
-                else:
+                else:  # Displaying the media label using its filename
                     cursor.execute("SELECT artist FROM media WHERE id = " + str(i + 1))
                     artist = cursor.fetchone()
                     cursor.execute("SELECT title FROM media WHERE id = " + str(i + 1))
@@ -317,16 +336,23 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
                                                  self.configure_media(media_title, path)))
                 self.library_items[-1].grid(row=index, column=4, padx=10, pady=5)
 
+                # Adding the removal button specific to the current media item
+                self.library_items.append(Button(path_frame_child, text="Remove",
+                                                 command=lambda media_title=label_entry.get(), path=entry_path[0]:
+                                                 self.remove_media(media_title, path)))
+                self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
+
         # Updating the width of the scrollable area
         path_frame_child.bind("<Configure>", lambda event, x=self.longest_item_length: self.scroll_function(event, x))
 
-        # The button that allows the user to add media files from other sources
-        add_music_button = Button(path_frame_child, text="Add Music...", command=self.add_media_dialog)
-        add_music_button.grid(row=index + 1, column=1)
+        # Refreshing the add button
+        self.add_music_button.destroy()
+        self.add_music_button = ttk.Button(self.media_frame, text="Add Media...", command=self.add_media_dialog)
+        self.add_music_button.pack(pady=20)
 
         cursor.close()
 
-    def scroll_function(self, event, longest_item_length):
+    def scroll_function(self, _, longest_item_length):
 
         """
             Dictates the specifications of the scrollable area.
@@ -336,10 +362,10 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         # The width of the scrollable area is calculated as follows:
         # - we assume that every ASCII character is 7-pixels wide
-        # - the width of the buttons appended to each media file is around 170 pixels
+        # - the width of the buttons appended to each media file is around 250 pixels
         # The total width is calculated by multiplying the width of the longest media item by 7, adding the width of
         # the buttons to the result
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"), width=longest_item_length * 7 + 170, height=200)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"), width=longest_item_length * 7 + 250, height=200)
 
     def folder_selector(self):
 
@@ -467,7 +493,6 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         tags_sql = cursor.fetchone()
 
         # Loading the GUI of the metadata frame
-        path_label = ttk.Label(metadata_frame, text="Song filename:")
         path_entry = ttk.Entry(metadata_frame)
         path_entry.insert(0, os.path.basename(media_path))
 
@@ -509,7 +534,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
                                    command=lambda path_value=path_entry, title_value=title_entry,
                                    artist_value=artist_entry, album_value=album_entry,
                                    release_date_value=release_date_entry, tags_value=tags_entry, x_window=window:
-                                   self.update_entry(0, path_entry, title_value, artist_value, album_value,
+                                   self.update_entry(path_value, 0, title_value, artist_value, album_value,
                                                      release_date_value, tags_value, 0, media_path, x_window))
 
         # The button that discards all changes
@@ -669,6 +694,14 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         file = filedialog.askopenfilename()
 
         self.add_media(file, 0)  # Adding the selected media file to the list
+
+        if file:  # Checking whether the user has aborted the operation
+            # Getting the path of the file with respect to the current media folder (since the "file" variable points
+            # to the location of the source file)
+            full_path = os.path.join(self.media_folder, os.path.basename(file)).replace("\\", "/")
+
+            # Whenever a media item is added, the user is automatically prompted to configure its metadata
+            self.configure_media(os.path.basename(file), full_path)
 
 
 if __name__ == "__main__":
