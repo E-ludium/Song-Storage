@@ -339,7 +339,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
                 # Adding the removal button specific to the current media item
                 self.library_items.append(Button(path_frame_child, text="Remove",
                                                  command=lambda media_title=label_entry.get(), path=entry_path[0]:
-                                                 self.remove_media(media_title, path)))
+                                                 self.remove_media_query(media_title, path)))
                 self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
 
         # Updating the width of the scrollable area
@@ -457,6 +457,86 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         mode2_radiobutton.pack(padx=10, pady=10)
 
         config_window.mainloop()
+
+    def remove_media_query(self, media_title, path):
+
+        """
+            Prompts the user to remove the selected media file from the list.
+
+            :param media_title: The title of the media file to be removed.
+            :param path: The path of the media file to be removed.
+            :return: None
+        """
+
+        remove_window = Toplevel()  # A new window will spawn, allowing the user to remove selected media
+        remove_window.title("Remove \"" + media_title + "\"?")
+        # The user is not allowed to interact with the root window while the remove window is opened
+        remove_window.grab_set()
+
+        remove_label = Label(remove_window, text="Are you sure you want to remove \"" + media_title +
+                                                 "\" from the media folder?")
+        remove_label.pack(padx=10, pady=10)
+
+        button_frame = Frame(remove_window)
+        button_frame.pack()
+
+        remove_button = Button(button_frame, text="Remove media", command=lambda x=path, y=remove_window:
+                               self.remove_media(x, y))
+        remove_button.grid(row=0, column=0, padx=10, pady=10)
+
+        cancel_button = Button(button_frame, text="Cancel", command=remove_window.destroy)
+        cancel_button.grid(row=0, column=1, padx=10, pady=10)
+
+        remove_window.mainloop()
+
+    def remove_media(self, media, window):
+
+        """
+            Removes the media given as parameter from the database and from the media folder.
+
+            :param media: The path to the media file to be removed.
+            :param window: The window which will need to close after database update.
+        """
+
+        cursor = self.connection.cursor()
+
+        # Getting the id of the media which will be removed in order to re-order the ID-s of the database
+        cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + media + "\"")
+        id_value = cursor.fetchone()
+
+        # Deleting the media item record from the database
+        cursor.execute("DELETE FROM media WHERE full_path = " + "\"" + media + "\"")
+
+        self.connection.commit()
+        cursor.close()
+
+        self.resort_keys(id_value[0])  # Re-order all keys after the deleted one
+
+        os.remove(media)  # Removes the media file from the media folder
+
+        window.destroy()  # Closes the remove window
+
+        # Reloading the media list of the root window
+        self.library_items = []
+        self.path_frame_parent.destroy()
+        self.display_media()
+
+    def resort_keys(self, id_value):
+
+        """
+            Re-orders the keys of the database.
+
+            :param id_value: The deleted key. All keys after this value need to be sorted.
+            :return: None
+        """
+
+        cursor = self.connection.cursor()
+
+        cursor.execute("UPDATE media SET id = id - 1 WHERE id > " + str(id_value))
+
+        self.connection.commit()
+
+        cursor.close()
 
     def display_metadata_widgets(self, metadata_frame, filename_frame, media_path, window):
 
