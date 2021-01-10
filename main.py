@@ -49,9 +49,6 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         self.path_frame_parent = Frame(self.media_frame, relief=GROOVE, width=500, height=100, bd=1)
 
-        # The button prompting the user to add media content to the media folder
-        self.add_music_button = Button(self.path_frame_parent, text="Add Music...")
-
         self.header = Label(self.media_frame, text="Available media:")
 
         # This label will display when the user attempts to add an already-existent media file
@@ -121,8 +118,6 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         self.media_folder_label.pack(side=LEFT)
 
         self.path_frame_parent.pack(side=LEFT)
-
-        self.add_music_button.pack()
 
         self.media_frame.pack(side=LEFT)
 
@@ -285,6 +280,10 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
                 self.library_items.append(Button(path_frame_child, text="Configure"))
                 self.library_items[-1].grid(row=index, column=3, padx=10, pady=5)
 
+        # The button that allows the user to add media files from other sources
+        add_music_button = Button(path_frame_child, text="Add Music...", command=self.add_media_dialog)
+        add_music_button.grid(row=index + 1, column=1)
+
         cursor.close()
 
     def scroll_function(self, event):
@@ -334,6 +333,22 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
             # Updating the value of the variable that the media folder label will use
             self.var.set("Media folder: " + self.media_folder)
+
+    def add_media_dialog(self):
+
+        """
+            Prompts the user to select a media file to be added to the media list.
+
+            :return: None
+        """
+
+        # Resetting the alert label
+        self.already_exists.text = ""
+        self.update_idletasks()
+
+        file = filedialog.askopenfilename()
+
+        self.add_media(file, 0)  # Adding the selected media file to the list
 
 
 if __name__ == "__main__":
