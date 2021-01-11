@@ -7,6 +7,7 @@
 from tkinter import *
 from tkinter import ttk
 from tkinter import filedialog
+from functools import partial
 import configparser
 import sqlite3
 from sqlite3 import Error
@@ -20,6 +21,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
     def __init__(self):
         super().__init__()
         self.title("Song Storage")
+        self.resizable(False, False)
         
         """Declaring the variables needed for back-end"""
         # Variables tasked with processing the configuration file of the application
@@ -62,9 +64,11 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         # The button that allows the user to add media files from other sources
         self.add_music_button = ttk.Button(self.button_frame, text="Add Media...", command=self.add_media_dialog)
 
-        # The button that allows the user to create a custom Savelist
+        # Savelist-related variables
         self.create_savelist_button = ttk.Button(self.button_frame, text="Create Savelist...",
                                                  command=self.create_savelist)
+        self.archive_name = StringVar()
+        self.archive_name.set("")
 
         # We are storing the length of the longest item in the media list in order to be able to modify the size of the
         # scrollable area (if necessary).
@@ -416,7 +420,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         if self.media_folder != "":  # Checking if the user has previously selected a media folder
             self.folder_locator.pack_forget()
             self.folder_button.pack_forget()
-            self.change_folder_button.pack(side=LEFT)
+            self.change_folder_button.pack(side=LEFT, padx=(0, 10))
 
             # Updating the value of the variable that the media folder label will use
             self.var.set("Media folder: " + self.media_folder)
@@ -800,8 +804,17 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
             self.configure_media(os.path.basename(file), full_path)
 
     def create_savelist(self):
-        savelist_window = Toplevel()
+
+        """
+            Displays a window that prompts the user to create a custom savelist based on certain criteria.
+
+            :return: None
+        """
+
+        savelist_window = Toplevel()  # A new window will spawn, allowing the user to create a custom Savelist
         savelist_window.title("Create Savelist...")
+
+        # Blocks the user from interacting with the root window while the savelist window is active
         savelist_window.grab_set()
 
         savelist_label = Label(savelist_window, text="Create a custom Savelist based on certain criteria.\n "
@@ -845,13 +858,15 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         archive_name_label = Label(savelist_frame, text="Name of the generated archive:")
         archive_name_label.grid(row=5, column=0, padx=10, pady=10)
 
-        archive_name_entry = ttk.Entry(savelist_frame)
+        archive_name_entry = ttk.Entry(savelist_frame, textvariable=self.archive_name)
         archive_name_entry.grid(row=5, column=1)
 
         button_frame = Frame(savelist_window)
         button_frame.pack()
 
-        generate_button = ttk.Button(button_frame, text="Generate Savelist", command=lambda
+        # The button that attempts to create the archive based on the specified parameters
+        # By default, the button is disabled as long as the "Archive Name" entry is left blank
+        generate_button = ttk.Button(button_frame, text="Generate Savelist", state="disabled", command=lambda
                                      title_value=title_contains_entry, artist_value=artist_name_entry,
                                      album_value=album_name_entry, release_year_value=release_year_entry,
                                      tags_value=tags_entry, archive_value=archive_name_entry, x_window=savelist_window:
@@ -859,60 +874,136 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
                                                             tags_value, archive_value, x_window))
         generate_button.grid(row=6, column=0, padx=10, pady=10)
 
+        # The partial method that checks if the "Archive Name" entry is filled
+        on_enter_trace = partial(self.on_enter_trace, generate_button)
+        self.archive_name.trace("w", on_enter_trace)
+
+        # The button that cancels the Savelist action
         cancel_button = ttk.Button(button_frame, text="Cancel", command=savelist_window.destroy)
         cancel_button.grid(row=6, column=1, padx=10, pady=10)
 
         savelist_window.mainloop()
 
+    def on_enter_trace(self, button, *_):
+
+        """
+            This function scans the archive name entry. If the entry is empty, the user cannot proceed to create a
+            Savelist archive.
+
+            :param button: The button whose state will change depending on the completion of the archive name entry.
+            :param _: Partial methods send multiple variables as parameters. We do not need them for the purpose of this
+            method.
+            :return: None
+        """
+
+        if self.archive_name.get() == "":  # The archive name entry is empty
+            button.configure(state="disabled")
+        else:  # The archive name entry is filled
+            button.configure(state="enabled")
+
     def generate_savelist(self, title, artist, album, release_year, tags, archive, window):
+
+        """
+            Creates a .zip file using the contents specified by the user in the entry fields. The .zip file is placed
+            in the media folder. The algorithm attempts to create the intersection of each SQL result from the provided
+            tags, in order for the final resulted list to contain only the media files that match every criterion
+            specified by the user.
+
+            :param title: The contents of the title entry.
+            :param artist: The contents of the artist entry.
+            :param album: The contents of the album entry.
+            :param release_year: The contents of the release year entry.
+            :param tags: The contents of the tags entry.
+            :param archive: The contents of the archive entry.
+            :param window: The window which will need to close after archive creation.
+            :return: None
+        """
 
         cursor = self.connection.cursor()
 
+        # The arrays storing the results of the SQL entries for each of the entries' contents
+        valid_title_files = []
+        valid_artist_files = []
+        valid_album_files = []
+        valid_release_year_files = []
+        valid_tags_files = []
+
+        # Creating the archive file using the name provided in the archive entry
         with zipfile.ZipFile(self.media_folder + "/" + archive.get() + '.zip', 'w') as savelist_zip:
 
-            if title.get() != "":
-                cursor.execute("SELECT full_path FROM media WHERE CHARINDEX(" + "\"" + title.get() + "\"" +
-                               ", title) > 0")
-                valid_title_files = cursor.fetchall()
+            if title.get() != "":  # The user has specified a custom criterion for the title
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + title.get() + "\"" +
+                               ") > 0")
 
-                for i in valid_title_files:
-                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
-                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_title_files.append(i[0])
 
-            if artist.get() != "":
+            if artist.get() != "":  # The user has specified a custom criterion for the artist
                 cursor.execute("SELECT full_path FROM media WHERE artist = " + "\"" + artist.get() + "\"")
-                valid_artist_files = cursor.fetchall()
 
-                for i in valid_artist_files:
-                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
-                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_artist_files.append(i[0])
 
-            if album.get() != "":
+            if album.get() != "":  # The user has specified a custom criterion for the album
                 cursor.execute("SELECT full_path FROM media WHERE album = " + "\"" + album.get() + "\"")
-                valid_album_files = cursor.fetchall()
 
-                for i in valid_album_files:
-                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
-                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_album_files.append(i[0])
 
-            if release_year.get() != "":
+            if release_year.get() != "":  # The user has specified a custom criterion for the release year
                 cursor.execute("SELECT full_path FROM media WHERE release_date = " + "\"" + release_year.get() + "\"")
-                valid_release_year_files = cursor.fetchall()
 
-                for i in valid_release_year_files:
-                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
-                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_release_year_files.append(i[0])
 
-            if tags.get() != "":
-                cursor.execute("SELECT full_path FROM media WHERE CHARINDEX(" + "\"" + tags.get() + "\"" +
+            if tags.get() != "":  # The user has specified a custom criterion for the tags
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(" + "\"" + tags.get() + "\"" +
                                ", tags) > 0")
-                valid_tags_files = cursor.fetchall()
 
-                for i in valid_tags_files:
-                    savelist_zip.write(self.media_folder + "/" + os.path.basename(i[0]),
-                                       os.path.basename(self.media_folder + "/" + os.path.basename(i[0])))
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_tags_files.append(i[0])
 
-        window.destroy()
+            # We are now performing intersection operation for each of the lists in order to add to the archive only
+            # the files that match every criterion passed by the user
+            files = self.intersection(self.intersection(self.intersection(self.intersection(valid_title_files,
+                                      valid_artist_files), valid_album_files), valid_release_year_files),
+                                      valid_tags_files)
+
+            for index in files:  # Writing the suitable files to the archive
+                savelist_zip.write(index, os.path.basename(index))
+
+        savelist_zip.close()  # Closing the archive
+
+        self.archive_name.set("")  # Resetting the archive name variable for further use
+
+        window.destroy()  # Closing the Savelist window
+
+    @staticmethod
+    def intersection(list1, list2):
+
+        """
+            Performs an intersection of the values of the two lists specified as parameters. Returns a list containing
+            only the shared values.
+
+            :param list1: The first list.
+            :param list2: The second list.
+            :return: Returns a list containing only the common variables of the two lists passed as arguments.
+        """
+
+        list3 = []
+
+        if not list1 and not list2:  # Both lists passed as arguments are empty
+            return list3
+
+        elif not list1 and list2:  # The first list passed as argument is empty
+            return list2
+
+        elif list1 and not list2:  # The second list passed as argument is empty
+            return list1
+
+        else:
+            list3 = [value for value in list1 if value in list2]  # Getting only the common values of the two lists
+            return list3
 
 
 if __name__ == "__main__":
