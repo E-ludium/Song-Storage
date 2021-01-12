@@ -122,11 +122,20 @@ def add_media(file, mode, gui_instance=None):
             if gui_instance is not None:  # The method has been fired by a GUI widget
                 gui_instance.display_media()  # Updating the media list
             else:  # The method has been fired by using CLI
-                print("The song was added successfully!\nDo you want to configure the song metadata now? (Y/N)")
+                cursor.execute("SELECT id FROM media WHERE full_path = \"" + full_path + "\"")
+                new_id = cursor.fetchone()
+
+                print("\nThe song was added successfully!\n\nThe ID of the song is: " + str(new_id[0]) +
+                      "\nDo you want to configure the song metadata now? (Y/N)")
+
                 option = input()  # Getting user response
                 if option.lower() == "y":  # The user has responded affirmatively
                     configure_media(full_path)
-                else:
+                elif option.lower() == "n":  # The user has responded negatively
+                    print("\nThe auto-processing tool assumed that the name of the song is \"" + assumed_title + "\" " +
+                          "and that the name of the artist is \"" + assumed_artist + "\".\nYou can always change " +
+                          "these values, as well as other metadata information, by using the \"Modify_data " +
+                          str(new_id[0]) + "\" command.")
                     return
 
         else:  # The selected file already exists in the database; letting the user know
@@ -148,106 +157,154 @@ def configure_media(file):
     """
 
     global option  # Using the global variable that specifies user choice (typically "Yes" or "No" choices)
+    cursor = connection.cursor()
+
+    if file.isnumeric():  # The user has attempted to configure the media file based on its ID in the database
+        cursor.execute("SELECT full_path FROM media WHERE id = " + file)
+
+        full_path_cursor = cursor.fetchone()
+
+        if full_path_cursor is None:  # The system couldn't find the specified ID
+            print("\nError: The specified ID does not exist in the database.")
+            return
+
+        full_path = full_path_cursor[0]
+
+    else:  # The user is either using the GUI or has provided the filename as parameter
+        full_path = os.path.join(media_folder, os.path.basename(file)).replace("\\", "/")
+
+        if not path.exists(full_path):  # (CLI-only) The user has provided an invalid filename
+            print("\nError: The specified media file does not exist.")
+            return
 
     # Processing the media file in the database
-    cursor = connection.cursor()
-    cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + file + "\"")
+    cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + full_path + "\"")
 
     entry_id = cursor.fetchone()
 
     # For each column in the database, we will present the user the current value for the media item and we will
     # ask them if they want to update this value.
-    print("Filename: " + file + "\nRename file? (Y/N)")  # The current full_path value
+    print("\nFilename: " + ntpath.basename(full_path) + "\nRename file? (Y/N)")  # The current full_path value
 
     option = input()  # Getting user response
 
     if option.lower() == "y":  # The user has responded affirmatively
-        filename = input("New filename: ")  # Inquiring the user about the new filename
+        filename = input("\nNew filename: ")  # Inquiring the user about the new filename
 
-        new_path = os.path.join(os.path.dirname(file), filename)  # New filename
-        os.rename(file, new_path)  # Renaming the file
+        new_path = os.path.join(os.path.dirname(full_path), filename).replace("\\", "/")  # New filename
+        os.rename(full_path, new_path)  # Renaming the file
 
         cursor.execute("UPDATE media SET full_path = " + "\"" + new_path + "\"" + " WHERE full_path = " + "\"" +
-                       file + "\"")
+                       full_path + "\"")
         connection.commit()  # Writing the changes to the database
 
-        print("File renamed successfully.")
+        print("\nFile renamed successfully.")
 
     cursor.execute("SELECT title FROM media WHERE id = " + str(entry_id[0]))
     song_title = cursor.fetchone()
 
-    print("Song title: " + song_title[0] + "\nRename song? (Y/N)")  # The current title value
+    print("\nSong title: " + song_title[0] + "\nRename song? (Y/N)")  # The current title value
 
     option = input()  # Getting user response
 
     if option.lower() == "y":  # The user has responded affirmatively
-        new_song_title = input("New song title: ")  # Inquiring the user about the new song title
+        new_song_title = input("\nNew song title: ")  # Inquiring the user about the new song title
 
         cursor.execute("UPDATE media SET title = " + "\"" + new_song_title + "\"" + " WHERE id = " + str(entry_id[0]))
         connection.commit()  # Writing the changes to the database
 
-        print("Song title updated successfully.")
+        print("\nSong title updated successfully.")
 
     cursor.execute("SELECT artist FROM media WHERE id = " + str(entry_id[0]))
     song_artist = cursor.fetchone()
 
-    print("Artist: " + song_artist[0] + "\nRename artist? (Y/N)")  # The current artist value
+    print("\nArtist: " + song_artist[0] + "\nRename artist? (Y/N)")  # The current artist value
 
     option = input()  # Getting user response
 
     if option.lower() == "y":  # The user has responded affirmatively
-        new_song_artist = input("New artist: ")  # Inquiring the user about the new artist
+        new_song_artist = input("\nNew artist: ")  # Inquiring the user about the new artist
 
         cursor.execute("UPDATE media SET artist = " + "\"" + new_song_artist + "\"" + " WHERE id = " + str(entry_id[0]))
         connection.commit()  # Writing the changes to the database
 
-        print("Artist updated successfully.")
+        print("\nArtist updated successfully.")
 
     cursor.execute("SELECT album FROM media WHERE id = " + str(entry_id[0]))
     song_album = cursor.fetchone()
 
-    print("Album: " + song_album[0] + "\nRename album? (Y/N)")  # The current album value
+    print("\nAlbum: " + song_album[0] + "\nRename album? (Y/N)")  # The current album value
 
     option = input()  # Getting user response
 
     if option.lower() == "y":  # The user has responded affirmatively
-        new_song_album = input("New album: ")  # Inquiring the user about the new album
+        new_song_album = input("\nNew album: ")  # Inquiring the user about the new album
 
         cursor.execute("UPDATE media SET album = " + "\"" + new_song_album + "\"" + " WHERE id = " + str(entry_id[0]))
         connection.commit()  # Writing the changes to the database
 
-        print("Album updated successfully.")
+        print("\nAlbum updated successfully.")
 
     cursor.execute("SELECT release_date FROM media WHERE id = " + str(entry_id[0]))
     song_release_date = cursor.fetchone()
 
-    print("Release date: " + song_release_date[0] + "\nChange release date? (Y/N)")  # The current release date value
+    print("\nRelease date: " + song_release_date[0] + "\nChange release date? (Y/N)")  # The current release date value
 
     option = input()  # Getting user response
 
     if option.lower() == "y":  # The user has responded affirmatively
-        new_release_date = input("New release date: ")  # Inquiring the user about the new release date
+        new_release_date = input("\nNew release date: ")  # Inquiring the user about the new release date
 
         cursor.execute("UPDATE media SET release_date = " + "\"" + new_release_date + "\"" + " WHERE id = " +
                        str(entry_id[0]))
         connection.commit()  # Writing the changes to the database
 
-        print("Song release date updated successfully.")
+        print("\nSong release date updated successfully.")
 
     cursor.execute("SELECT tags FROM media WHERE id = " + str(entry_id[0]))
     song_tags = cursor.fetchone()
 
-    print("Song tags: " + song_tags[0] + "\nChange tags? (Y/N)")  # The current tags value
+    print("\nSong tags: " + song_tags[0] + "\nChange tags? (Y/N)")  # The current tags value
 
     option = input()  # Getting user response
 
     if option.lower() == "y":  # The user has responded affirmatively
-        new_song_tags = input("New song tags: ")  # Inquiring the user about the new tags
+        new_song_tags = input("\nNew song tags: ")  # Inquiring the user about the new tags
 
         cursor.execute("UPDATE media SET tags = " + "\"" + new_song_tags + "\"" + " WHERE id = " + str(entry_id[0]))
         connection.commit()  # Writing the changes to the database
 
-        print("Song tags updated successfully.")
+        print("\nSong tags updated successfully.")
+
+    print("\nConfiguration completed.")
+
+
+def display_media_cli():
+
+    """
+        Dedicated method for displaying the media list in command-line interfaces. On each line, the output displays
+        one item from the media list, followed by its ID in the database. The algorithm only displays media items
+        from the current media folder.
+
+        :return: None
+    """
+
+    cursor = connection.cursor()
+
+    # Parsing the entire database and displaying every record that matches the current media folder
+    cursor.execute("SELECT COUNT(*) FROM media")
+
+    number_of_entries = cursor.fetchone()  # This variable will store the amount of records in the database
+
+    for i in range(number_of_entries[0]):
+        cursor.execute("SELECT full_path FROM media WHERE id = " + str(i + 1))
+        entry_path = cursor.fetchone()  # This variable will store the path of the currently selected item
+
+        # Checking if the currently selected item from the database is located in the media folder
+        if (os.path.dirname(entry_path[0])) == config_var['MEDIA FOLDER']['folder']:
+            print("\n" + os.path.basename(entry_path[0]) + " || ID: " + str(i + 1))
+
+    cursor.close()
 
 
 def remove_media(media, window=None, gui_instance=None):
@@ -338,7 +395,7 @@ def resort_keys(id_value):
 def configure_media_folder(sys_arguments):
 
     """
-        CLI-only method. Either displays the current media folder or changes it with the specified value.
+        CLI-only method. Either displays the current media folder or changes it to the specified value.
 
         :param sys_arguments: Arguments passed at the command line. Minimum 1 argument needs to be passed for this
                               method to run. The first argument specifies the name of the command. The 2nd parameter
@@ -543,38 +600,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.add_music_button.grid(row=0, column=0, padx=10, pady=20)
         self.create_savelist_button.grid(row=0, column=1, padx=10, pady=20)
 
-    def search(self, entry):
-        """
-            Searches the database for the value provided in the search box, then updates the media list to show only
-            the media files that match the value given.
-
-            :param entry: The search entry box.
-            :return: None
-        """
-
-        if entry.get() != "":  # The algorithm only needs to run if the user has entered a search query
-
-            cursor = connection.cursor()
-
-            # Looking up the search entry in each of the database's columns
-            cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + entry.get() + "\"" +
-                           ") > 0 OR INSTR(artist, " + "\"" + entry.get() + "\"" + ") > 0 OR INSTR(album, " + "\"" +
-                           entry.get() + "\"" + ") > 0 OR INSTR(release_date, " + "\"" + entry.get() + "\"" + ") > 0" +
-                           " OR INSTR(tags, " + "\"" + entry.get() + "\"" + ") > 0")
-
-            files = cursor.fetchall()
-
-            # Packing the "Back" button, which quits the searching session
-            self.back_button.grid(row=0, column=0, padx=5)
-            self.search_entry.grid(row=0, column=1, padx=10, pady=20)
-            self.searh_button.grid(row=0, column=2, padx=5)
-            self.advanced_search_button.grid(row=0, column=3, padx=5)
-
-            self.display_media(files)  # Displaying the media list containing only the search results
-
-        else:  # The user has attempted a search on an empty string; displaying the entire media list instead
-            self.display_media()
-
     def display_media(self, search_list=None):
 
         """
@@ -588,6 +613,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         """
 
         cursor = connection.cursor()
+
+        index = 0  # Using an index to determine the correct row in which every media item needs to be placed
 
         # Resetting the media frame
         self.library_items = []
@@ -609,8 +636,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
         # The variable that stores the length (in characters) of the longest item in the media list
         self.longest_item_length = 0
-
-        index = 0  # Using an index to determine the correct row in which every media item needs to be placed
 
         if search_list is None:  # No search string was provided; displaying the entire media list
             self.back_button.grid_forget()
@@ -636,12 +661,11 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
                 # Checking if the currently selected item from the database is located in the media folder
                 if (os.path.dirname(entry_path[0])) == config_var['MEDIA FOLDER']['folder']:
-
                     # Adding the media item title to the media list
                     cursor.execute("SELECT mode FROM media WHERE id = " + str(i + 1))
                     mode = cursor.fetchone()
 
-                    if int(mode[0]):  # Displaying the media label using its metadata
+                    if int(mode[0]):  # Displaying the media label using its filename
                         self.library_items.append(Label(path_frame_child, textvariable=display_entry))
                         self.library_items[-1].grid(row=index, column=1)
 
@@ -649,7 +673,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                         if current_item_length > self.longest_item_length:
                             self.longest_item_length = current_item_length
 
-                    else:  # Displaying the media label using its filename
+                    else:  # Displaying the media label using its metadata
                         cursor.execute("SELECT artist FROM media WHERE id = " + str(i + 1))
                         artist = cursor.fetchone()
                         cursor.execute("SELECT title FROM media WHERE id = " + str(i + 1))
@@ -684,7 +708,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                     self.library_items.append(Button(path_frame_child, text="Remove",
                                                      command=lambda media_title=label_entry.get(),
                                                      file_path=entry_path[0]:
-                                                     self.remove_media_query(media_title, path)))
+                                                     self.remove_media_query(media_title, file_path)))
                     self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
 
         else:  # A search string was provided
@@ -706,7 +730,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                     mode = cursor.fetchone()
 
                     if int(mode[0]):  # Displaying the media label using its metadata
-                        self.library_items.append(Label(path_frame_child, textvariable=display_entry))
+                        self.library_items.append(
+                            Label(path_frame_child, textvariable=display_entry))
                         self.library_items[-1].grid(row=index, column=1)
 
                         current_item_length = len(display_entry.get())
@@ -722,7 +747,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                         display_label = StringVar()
                         display_label.set(artist[0] + " - " + title[0])
 
-                        self.library_items.append(Label(path_frame_child, textvariable=display_label))
+                        self.library_items.append(
+                            Label(path_frame_child, textvariable=display_label))
                         self.library_items[-1].grid(row=index, column=1)
 
                         current_item_length = len(display_label.get())
@@ -754,7 +780,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
         # Refreshing the add button
         self.add_music_button.destroy()
-        self.add_music_button = ttk.Button(self.button_frame, text="Add Media...", command=self.add_media_dialog)
+        self.add_music_button = ttk.Button(self.button_frame, text="Add Media...",
+                                           command=self.add_media_dialog)
         self.add_music_button.grid(row=0, column=0, padx=10, pady=20)
 
         # Refreshing the savelist button
@@ -764,6 +791,38 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.create_savelist_button.grid(row=0, column=1, padx=10, pady=20)
 
         cursor.close()
+
+    def search(self, entry):
+        """
+            Searches the database for the value provided in the search box, then updates the media list to show only
+            the media files that match the value given.
+
+            :param entry: The search entry box.
+            :return: None
+        """
+
+        if entry.get() != "":  # The algorithm only needs to run if the user has entered a search query
+
+            cursor = connection.cursor()
+
+            # Looking up the search entry in each of the database's columns
+            cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + entry.get() + "\"" +
+                           ") > 0 OR INSTR(artist, " + "\"" + entry.get() + "\"" + ") > 0 OR INSTR(album, " + "\"" +
+                           entry.get() + "\"" + ") > 0 OR INSTR(release_date, " + "\"" + entry.get() + "\"" + ") > 0" +
+                           " OR INSTR(tags, " + "\"" + entry.get() + "\"" + ") > 0")
+
+            files = cursor.fetchall()
+
+            # Packing the "Back" button, which quits the searching session
+            self.back_button.grid(row=0, column=0, padx=5)
+            self.search_entry.grid(row=0, column=1, padx=10, pady=20)
+            self.searh_button.grid(row=0, column=2, padx=5)
+            self.advanced_search_button.grid(row=0, column=3, padx=5)
+
+            self.display_media(files)  # Displaying the media list containing only the search results
+
+        else:  # The user has attempted a search on an empty string; displaying the entire media list instead
+            self.display_media()
 
     def scroll_function(self, _, longest_item_length):
 
@@ -1349,8 +1408,17 @@ class SongStorageCLI:
         elif sys.argv[1].lower() == "remove_song":
             remove_media(sys.argv[2])
 
+        elif sys.argv[1].lower() == "list_media":
+            display_media_cli()
+
         elif sys.argv[1].lower() == "media_folder":
             configure_media_folder(sys.argv)
+
+        elif sys.argv[1].lower() == "modify_data":
+            configure_media(sys.argv[2])
+
+        elif sys.argv[1].lower() == "load_gui":
+            SongStorageGUI().mainloop()
 
 
 if __name__ == "__main__":
