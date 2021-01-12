@@ -307,6 +307,79 @@ def display_media_cli():
     cursor.close()
 
 
+def generate_savelist_cli(sys_arguments):
+    """
+        Creates a .zip file using the contents specified by the user in the entry fields. The .zip file is placed
+        in the media folder. The algorithm attempts to create the intersection of each SQL result from the provided
+        tags, in order for the final resulted list to contain only the media files that match every criterion
+        specified by the user.
+
+        :param sys_arguments: Arguments passed at the command line. Minimum 1 argument needs to be passed for this
+                              method to run. The first argument specifies the name of the command. The 2nd parameter
+                              is optional and specifies the location of the new media folder.
+        :return: None
+    """
+
+    cursor = connection.cursor()
+
+    # The arrays storing the results of the SQL entries for each of the entries' contents
+    valid_title_files = []
+    valid_artist_files = []
+    valid_album_files = []
+    valid_release_year_files = []
+    valid_tags_files = []
+
+    # Creating the archive file using the name provided in the archive entry
+    with zipfile.ZipFile(media_folder + "/" + sys_arguments[2] + '.zip', 'w') as savelist_zip:
+        for index in range(len(sys_arguments) - 3):
+            if sys_arguments[index + 3].startswith("title="):  # The user has specified a custom criterion for the title
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + sys_arguments[index+3][6:]
+                               + "\"" + ") > 0")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_title_files.append(i[0])
+
+            # The user has specified a custom criterion for the artist
+            if sys_arguments[index + 3].startswith("artist="):
+                cursor.execute("SELECT full_path FROM media WHERE artist = " + "\"" + sys_arguments[index+3][7:] + "\"")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_artist_files.append(i[0])
+
+            if sys_arguments[index + 3].startswith("album="):  # The user has specified a custom criterion for the album
+                cursor.execute("SELECT full_path FROM media WHERE album = " + "\"" + sys_arguments[index+3][6:] + "\"")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_album_files.append(i[0])
+
+            # The user has specified a custom criterion for the release year
+            if sys_arguments[index + 3].startswith("release_year="):
+                cursor.execute("SELECT full_path FROM media WHERE release_date = " + "\"" + sys_arguments[index+3][13:]
+                               + "\"")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_release_year_files.append(i[0])
+
+            if sys_arguments[index + 2].startswith("tags="):  # The user has specified a custom criterion for the tags
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(" + "\"" + sys_arguments[index+3][5:] + "\"" +
+                               ", tags) > 0")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    valid_tags_files.append(i[0])
+
+            # We are now performing intersection operation for each of the lists in order to add to the archive only
+            # the files that match every criterion passed by the user
+            files = intersection(intersection(intersection(intersection(valid_title_files, valid_artist_files),
+                                 valid_album_files), valid_release_year_files), valid_tags_files)
+
+            for index2 in files:  # Writing the suitable files to the archive
+                savelist_zip.write(index2, os.path.basename(index2))
+
+    savelist_zip.close()  # Closing the archive
+
+    print("\nArchive created successfully.")
+
+
 def remove_media(media, window=None, gui_instance=None):
 
     """
@@ -443,6 +516,33 @@ def folder_selector(folder_path=None, gui_instance=None):
             config_var.write(configfile)  # Writing the changes to the configuration file
 
         print("Media folder updated.")
+
+
+def intersection(list1, list2):
+
+    """
+        Performs an intersection of the values of the two lists specified as parameters. Returns a list containing
+        only the shared values.
+
+        :param list1: The first list.
+        :param list2: The second list.
+        :return: Returns a list containing only the common variables of the two lists passed as arguments.
+    """
+
+    list3 = []
+
+    if not list1 and not list2:  # Both lists passed as arguments are empty
+        return list3
+
+    elif not list1 and list2:  # The first list passed as argument is empty
+        return list2
+
+    elif list1 and not list2:  # The second list passed as argument is empty
+        return list1
+
+    else:
+        list3 = [value for value in list1 if value in list2]  # Getting only the common values of the two lists
+        return list3
 
 
 class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface to the user
@@ -1353,9 +1453,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
             # We are now performing intersection operation for each of the lists in order to add to the archive only
             # the files that match every criterion passed by the user
-            files = self.intersection(self.intersection(self.intersection(self.intersection(valid_title_files,
-                                      valid_artist_files), valid_album_files), valid_release_year_files),
-                                      valid_tags_files)
+            files = intersection(intersection(intersection(intersection(valid_title_files, valid_artist_files),
+                                 valid_album_files), valid_release_year_files), valid_tags_files)
 
             for index in files:  # Writing the suitable files to the archive
                 savelist_zip.write(index, os.path.basename(index))
@@ -1365,33 +1464,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.archive_name.set("")  # Resetting the archive name variable for further use
 
         window.destroy()  # Closing the Savelist window
-
-    @staticmethod
-    def intersection(list1, list2):
-
-        """
-            Performs an intersection of the values of the two lists specified as parameters. Returns a list containing
-            only the shared values.
-
-            :param list1: The first list.
-            :param list2: The second list.
-            :return: Returns a list containing only the common variables of the two lists passed as arguments.
-        """
-
-        list3 = []
-
-        if not list1 and not list2:  # Both lists passed as arguments are empty
-            return list3
-
-        elif not list1 and list2:  # The first list passed as argument is empty
-            return list2
-
-        elif list1 and not list2:  # The second list passed as argument is empty
-            return list1
-
-        else:
-            list3 = [value for value in list1 if value in list2]  # Getting only the common values of the two lists
-            return list3
 
 
 class SongStorageCLI:
@@ -1416,6 +1488,9 @@ class SongStorageCLI:
 
         elif sys.argv[1].lower() == "modify_data":
             configure_media(sys.argv[2])
+
+        elif sys.argv[1].lower() == "create_save_list":
+            generate_savelist_cli(sys.argv)
 
         elif sys.argv[1].lower() == "load_gui":
             SongStorageGUI().mainloop()
