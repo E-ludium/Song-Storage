@@ -25,14 +25,21 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         
         """Declaring the variables needed for back-end"""
         # Variables tasked with processing the configuration file of the application
-        self.config = configparser.ConfigParser()  # We will use a config file to store the path of the media folder
-        self.config.read('config.ini')
-        self.media_folder = self.config['MEDIA FOLDER']['folder']  # The value that stores the path of the media folder
+        self.config_var = configparser.ConfigParser()  # We will use a config file to store the path of the media folder
+        self.config_var.read('config.ini')
+        # The value that stores the path of the media folder
+        self.media_folder = self.config_var['MEDIA FOLDER']['folder']
 
         # Variable tasked with managing the database connected to the application
         self.connection = self.connect_to_database()
         
         """Declaring the variables the GUI will use"""
+        self.menubar = Menu()  # The file menu where the user can specify global settings for the application
+        self.filemenu = Menu(self.menubar, tearoff=0)
+        self.runmode_menu = Menu(self.filemenu, tearoff=0)
+        self.filemenu.add_cascade(label="Run Mode", menu=self.runmode_menu)
+        self.config(menu=self.menubar)
+
         self.init_frame = Frame()  # The main frame of the application
         self.folder_locator = Label(self.init_frame,
                                     text="Please choose the folder where you'd like to store your media: ")
@@ -53,6 +60,17 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         self.canvas = Canvas()
 
         self.path_frame_parent = Frame(self.media_frame, relief=GROOVE, width=500, height=100, bd=1)
+
+        # Variables related to the search frame of the application
+        self.search_frame = Frame()
+
+        self.back_image = PhotoImage(file="Resources/Icons/Back Icon #2.png")
+        self.back_button = Button(self.search_frame, image=self.back_image, bg="#ffffff", command=self.display_media)
+
+        self.search_entry = ttk.Entry(self.search_frame, width=50)
+        self.searh_button = ttk.Button(self.search_frame, text="Search",
+                                       command=lambda entry=self.search_entry: self.search(self.search_entry))
+        self.advanced_search_button = ttk.Button(self.search_frame, text="Advanced Search...")
 
         self.header = Label(self.media_frame, text="Available media:")
 
@@ -140,6 +158,13 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         self.path_frame_parent.pack(side=LEFT)
 
+        self.search_frame.pack()
+
+        self.search_frame.pack()
+        self.search_entry.grid(row=0, column=0, padx=10, pady=20)
+        self.searh_button.grid(row=0, column=1, padx=5)
+        self.advanced_search_button.grid(row=0, column=2, padx=5)
+
         self.media_frame.pack()
 
         self.button_frame.pack()
@@ -189,6 +214,38 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         self.add_music_button.grid(row=0, column=0, padx=10, pady=20)
         self.create_savelist_button.grid(row=0, column=1, padx=10, pady=20)
+
+    def search(self, entry):
+        """
+            Searches the database for the value provided in the search box, then updates the media list to show only
+            the media files that match the value given.
+
+            :param entry: The search entry box.
+            :return: None
+        """
+
+        if entry.get() != "":  # The algorithm only needs to run if the user has entered a search query
+
+            cursor = self.connection.cursor()
+
+            # Looking up the search entry in each of the database's columns
+            cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + entry.get() + "\"" +
+                           ") > 0 OR INSTR(artist, " + "\"" + entry.get() + "\"" + ") > 0 OR INSTR(album, " + "\"" +
+                           entry.get() + "\"" + ") > 0 OR INSTR(release_date, " + "\"" + entry.get() + "\"" + ") > 0" +
+                           " OR INSTR(tags, " + "\"" + entry.get() + "\"" + ") > 0")
+
+            files = cursor.fetchall()
+
+            # Packing the "Back" button, which quits the searching session
+            self.back_button.grid(row=0, column=0, padx=5)
+            self.search_entry.grid(row=0, column=1, padx=10, pady=20)
+            self.searh_button.grid(row=0, column=2, padx=5)
+            self.advanced_search_button.grid(row=0, column=3, padx=5)
+
+            self.display_media(files)  # Displaying the media list containing only the search results
+
+        else:  # The user has attempted a search on an empty string; displaying the entire media list instead
+            self.display_media()
 
     def add_media(self, file, mode):
 
@@ -254,27 +311,25 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
                 self.already_exists.text = "There is already a song with this name in the media folder!"
                 self.update_idletasks()
 
-            self.library_items = []
-            self.path_frame_parent.destroy()
             self.display_media()
 
-    def display_media(self):
+    def display_media(self, search_list=None):
 
         """
             The core of the program's GUI.
-            Displays the entire list of media files to the user.
+            Displays the entire list of media files to the user, or the list containing the search results for a
+            particular search query.
+
+            :param search_list: Optional parameter that specifies the list to be displayed, containing search results.
 
             :return: None
         """
 
-        self.longest_item_length = 0
-
-        # Parsing the entire database and displaying every record that matches the current media folder
         cursor = self.connection.cursor()
-        cursor.execute("SELECT COUNT(*) FROM media")
 
-        number_of_entries = cursor.fetchone()  # This variable will store the amount of records in the database
-
+        # Resetting the media frame
+        self.library_items = []
+        self.path_frame_parent.destroy()
         self.path_frame_parent = Frame(self.media_frame, relief=GROOVE, width=500, height=100, bd=1)
         self.path_frame_parent.pack()
 
@@ -290,71 +345,145 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         scrollbar.pack(side=RIGHT, fill=Y)
         self.canvas.pack(side=LEFT)
 
+        # The variable that stores the length (in characters) of the longest item in the media list
+        self.longest_item_length = 0
+
         index = 0  # Using an index to determine the correct row in which every media item needs to be placed
 
-        for i in range(number_of_entries[0]):  # Parsing every item in the database
-            index += 1
+        if search_list is None:  # No search string was provided; displaying the entire media list
+            self.back_button.grid_forget()
+            self.search_entry.delete(0, 'end')
 
-            cursor.execute("SELECT full_path FROM media WHERE id = " + str(i + 1))
-            entry_path = cursor.fetchone()  # This variable will store the path of the currently selected item
+            # Parsing the entire database and displaying every record that matches the current media folder
+            cursor.execute("SELECT COUNT(*) FROM media")
 
-            display_entry = StringVar()
-            display_entry.set(os.path.basename(entry_path[0]))
+            number_of_entries = cursor.fetchone()  # This variable will store the amount of records in the database
 
-            # This variable will store the name of the media file without showing the extension
-            label_entry = StringVar()
-            label_entry.set(os.path.splitext(display_entry.get())[0])
+            for i in range(number_of_entries[0]):  # Parsing every item in the database
+                index += 1
 
-            # Checking if the currently selected item from the database is located in the media folder
-            if (os.path.dirname(entry_path[0])) == self.config['MEDIA FOLDER']['folder']:
+                cursor.execute("SELECT full_path FROM media WHERE id = " + str(i + 1))
+                entry_path = cursor.fetchone()  # This variable will store the path of the currently selected item
 
-                # Adding the media item title to the media list
-                cursor.execute("SELECT mode FROM media WHERE id = " + str(i + 1))
-                mode = cursor.fetchone()
+                display_entry = StringVar()
+                display_entry.set(os.path.basename(entry_path[0]))
 
-                if int(mode[0]):  # Displaying the media label using its metadata
-                    self.library_items.append(Label(path_frame_child, textvariable=display_entry))
-                    self.library_items[-1].grid(row=index, column=1)
+                # This variable will store the name of the media file without showing the extension
+                label_entry = StringVar()
+                label_entry.set(os.path.splitext(display_entry.get())[0])
 
-                    current_item_length = len(display_entry.get())
-                    if current_item_length > self.longest_item_length:
-                        self.longest_item_length = current_item_length
+                # Checking if the currently selected item from the database is located in the media folder
+                if (os.path.dirname(entry_path[0])) == self.config_var['MEDIA FOLDER']['folder']:
 
-                else:  # Displaying the media label using its filename
-                    cursor.execute("SELECT artist FROM media WHERE id = " + str(i + 1))
-                    artist = cursor.fetchone()
-                    cursor.execute("SELECT title FROM media WHERE id = " + str(i + 1))
-                    title = cursor.fetchone()
+                    # Adding the media item title to the media list
+                    cursor.execute("SELECT mode FROM media WHERE id = " + str(i + 1))
+                    mode = cursor.fetchone()
 
-                    display_label = StringVar()
-                    display_label.set(artist[0] + " - " + title[0])
+                    if int(mode[0]):  # Displaying the media label using its metadata
+                        self.library_items.append(Label(path_frame_child, textvariable=display_entry))
+                        self.library_items[-1].grid(row=index, column=1)
 
-                    self.library_items.append(Label(path_frame_child, textvariable=display_label))
-                    self.library_items[-1].grid(row=index, column=1)
+                        current_item_length = len(display_entry.get())
+                        if current_item_length > self.longest_item_length:
+                            self.longest_item_length = current_item_length
 
-                    current_item_length = len(display_label.get())
-                    if current_item_length > self.longest_item_length:
-                        self.longest_item_length = current_item_length
+                    else:  # Displaying the media label using its filename
+                        cursor.execute("SELECT artist FROM media WHERE id = " + str(i + 1))
+                        artist = cursor.fetchone()
+                        cursor.execute("SELECT title FROM media WHERE id = " + str(i + 1))
+                        title = cursor.fetchone()
 
-                # Adding the play button specific to the current media item
-                self.library_items.append(Button(path_frame_child, text="Play"))
-                self.library_items[-1].grid(row=index, column=2, padx=10, pady=5)
+                        display_label = StringVar()
+                        display_label.set(artist[0] + " - " + title[0])
 
-                # Adding the info button specific to the current media item
-                self.library_items.append(Button(path_frame_child, text="Info"))
-                self.library_items[-1].grid(row=index, column=3, padx=10, pady=5)
+                        self.library_items.append(Label(path_frame_child, textvariable=display_label))
+                        self.library_items[-1].grid(row=index, column=1)
 
-                # Adding the configuration button specific to the current media item
-                self.library_items.append(Button(path_frame_child, text="Configure",
-                                                 command=lambda media_title=label_entry.get(), path=entry_path[0]:
-                                                 self.configure_media(media_title, path)))
-                self.library_items[-1].grid(row=index, column=4, padx=10, pady=5)
+                        current_item_length = len(display_label.get())
+                        if current_item_length > self.longest_item_length:
+                            self.longest_item_length = current_item_length
 
-                # Adding the removal button specific to the current media item
-                self.library_items.append(Button(path_frame_child, text="Remove",
-                                                 command=lambda media_title=label_entry.get(), path=entry_path[0]:
-                                                 self.remove_media_query(media_title, path)))
-                self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
+                    # Adding the play button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Play"))
+                    self.library_items[-1].grid(row=index, column=2, padx=10, pady=5)
+
+                    # Adding the info button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Info"))
+                    self.library_items[-1].grid(row=index, column=3, padx=10, pady=5)
+
+                    # Adding the configuration button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Configure",
+                                                     command=lambda media_title=label_entry.get(), path=entry_path[0]:
+                                                     self.configure_media(media_title, path)))
+                    self.library_items[-1].grid(row=index, column=4, padx=10, pady=5)
+
+                    # Adding the removal button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Remove",
+                                                     command=lambda media_title=label_entry.get(), path=entry_path[0]:
+                                                     self.remove_media_query(media_title, path)))
+                    self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
+
+        else:  # A search string was provided
+            for i in search_list:  # Displaying every item in the search results
+                index += 1
+
+                display_entry = StringVar()
+                display_entry.set(os.path.basename(i[0]))
+
+                # This variable will store the name of the media file without showing the extension
+                label_entry = StringVar()
+                label_entry.set(os.path.splitext(display_entry.get())[0])
+
+                # Checking if the currently selected item from the database is located in the media folder
+                if (os.path.dirname(i[0])) == self.config_var['MEDIA FOLDER']['folder']:
+
+                    # Adding the media item title to the media list
+                    cursor.execute("SELECT mode FROM media WHERE full_path = " + "\"" + i[0] + "\"")
+                    mode = cursor.fetchone()
+
+                    if int(mode[0]):  # Displaying the media label using its metadata
+                        self.library_items.append(Label(path_frame_child, textvariable=display_entry))
+                        self.library_items[-1].grid(row=index, column=1)
+
+                        current_item_length = len(display_entry.get())
+                        if current_item_length > self.longest_item_length:
+                            self.longest_item_length = current_item_length
+
+                    else:  # Displaying the media label using its filename
+                        cursor.execute("SELECT artist FROM media WHERE full_path = " + "\"" + i[0] + "\"")
+                        artist = cursor.fetchone()
+                        cursor.execute("SELECT title FROM media WHERE full_path = " + "\"" + i[0] + "\"")
+                        title = cursor.fetchone()
+
+                        display_label = StringVar()
+                        display_label.set(artist[0] + " - " + title[0])
+
+                        self.library_items.append(Label(path_frame_child, textvariable=display_label))
+                        self.library_items[-1].grid(row=index, column=1)
+
+                        current_item_length = len(display_label.get())
+                        if current_item_length > self.longest_item_length:
+                            self.longest_item_length = current_item_length
+
+                    # Adding the play button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Play"))
+                    self.library_items[-1].grid(row=index, column=2, padx=10, pady=5)
+
+                    # Adding the info button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Info"))
+                    self.library_items[-1].grid(row=index, column=3, padx=10, pady=5)
+
+                    # Adding the configuration button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Configure",
+                                                     command=lambda media_title=label_entry.get(), path=i[0]:
+                                                     self.configure_media(media_title, path)))
+                    self.library_items[-1].grid(row=index, column=4, padx=10, pady=5)
+
+                    # Adding the removal button specific to the current media item
+                    self.library_items.append(Button(path_frame_child, text="Remove",
+                                                     command=lambda media_title=label_entry.get(), path=i[0]:
+                                                     self.remove_media_query(media_title, path)))
+                    self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
 
         # Updating the width of the scrollable area
         path_frame_child.bind("<Configure>", lambda event, x=self.longest_item_length: self.scroll_function(event, x))
@@ -397,10 +526,10 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
 
         folder = filedialog.askdirectory()  # We will use an OS-specific dialog box call to select the media folder
         
-        self.config.set('MEDIA FOLDER', 'folder', folder)  # Updating the value inside the configuration file
+        self.config_var.set('MEDIA FOLDER', 'folder', folder)  # Updating the value inside the configuration file
         
         with open('config.ini', 'w') as configfile:   # Writing the changes to the configuration file
-            self.config.write(configfile)
+            self.config_var.write(configfile)
 
         self.display_media_folder()
 
@@ -415,7 +544,7 @@ class SongStorage(Tk):  # The GUI class responsible for showing the interface to
         """
 
         # Updating the value of the variable storing the path to the media folder
-        self.media_folder = self.config['MEDIA FOLDER']['folder']
+        self.media_folder = self.config_var['MEDIA FOLDER']['folder']
 
         if self.media_folder != "":  # Checking if the user has previously selected a media folder
             self.folder_locator.pack_forget()
