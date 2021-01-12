@@ -12,6 +12,7 @@ import configparser
 import sqlite3
 from sqlite3 import Error
 import os
+from os import path
 import ntpath
 import shutil
 import zipfile
@@ -56,20 +57,6 @@ def connect_to_database():
     return temp_connection
 
 
-# Variables tasked with processing the configuration file of the application
-config_var = configparser.ConfigParser()  # We will use a config file to store the path of the media folder
-config_var.read('config.ini')
-
-connection = connect_to_database()
-
-# The value that stores the path of the media folder
-media_folder = config_var['MEDIA FOLDER']['folder']
-
-menu_var = config_var['RUN-MODE']['run_mode']
-
-option = ""
-
-
 def add_media(file, mode, gui_instance=None):
     """
         Adds the file specified as parameter to the database.
@@ -84,7 +71,7 @@ def add_media(file, mode, gui_instance=None):
                              means the method will process some GUI-related elements such as widgets.
     """
 
-    global option
+    global option  # Using the global variable that specifies user choice (typically "Yes" or "No" choices)
 
     if file.endswith('.mp3') or file.endswith('.wav'):  # Checking if the specified file is a valid media file
         assumed_title = ""  # This variable will store the title of the media
@@ -132,146 +119,271 @@ def add_media(file, mode, gui_instance=None):
 
             connection.commit()
 
-            if gui_instance is not None:
-                gui_instance.display_media()
-            else:
+            if gui_instance is not None:  # The method has been fired by a GUI widget
+                gui_instance.display_media()  # Updating the media list
+            else:  # The method has been fired by using CLI
                 print("The song was added successfully!\nDo you want to configure the song metadata now? (Y/N)")
-                option = input()
-                if option.lower() == "y":
+                option = input()  # Getting user response
+                if option.lower() == "y":  # The user has responded affirmatively
                     configure_media(full_path)
                 else:
                     return
 
         else:  # The selected file already exists in the database; letting the user know
-            if gui_instance is not None:
+            if gui_instance is not None:  # The method has been fired by a GUI widget
                 # Updating the label that alerts the user about the presence of the media file
                 gui_instance.already_exists.text = "There is already a song with this name in the media folder!"
                 gui_instance.update_idletasks()
-            else:
+            else:  # The method has been fired by using CLI
                 print("There is already a song with this name in the media folder!")
 
 
 def configure_media(file):
-    global option
+
+    """
+        This is the method used by the CLI for modifying media metadata.
+
+        :param file: The media file to be altered.
+        :return: None
+    """
+
+    global option  # Using the global variable that specifies user choice (typically "Yes" or "No" choices)
+
+    # Processing the media file in the database
     cursor = connection.cursor()
     cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + file + "\"")
 
     entry_id = cursor.fetchone()
 
-    print("Filename: " + file + "\nRename file? (Y/N)")
-    option = input()
-    if option.lower() == "y":
-        filename = input("New filename: ")
+    # For each column in the database, we will present the user the current value for the media item and we will
+    # ask them if they want to update this value.
+    print("Filename: " + file + "\nRename file? (Y/N)")  # The current full_path value
+
+    option = input()  # Getting user response
+
+    if option.lower() == "y":  # The user has responded affirmatively
+        filename = input("New filename: ")  # Inquiring the user about the new filename
 
         new_path = os.path.join(os.path.dirname(file), filename)  # New filename
-        os.rename(file, new_path)
+        os.rename(file, new_path)  # Renaming the file
 
         cursor.execute("UPDATE media SET full_path = " + "\"" + new_path + "\"" + " WHERE full_path = " + "\"" +
                        file + "\"")
-        connection.commit()
+        connection.commit()  # Writing the changes to the database
 
         print("File renamed successfully.")
 
     cursor.execute("SELECT title FROM media WHERE id = " + str(entry_id[0]))
     song_title = cursor.fetchone()
 
-    print("Song title: " + song_title[0] + "\nRename song? (Y/N)")
-    option = input()
-    if option.lower() == "y":
-        new_song_title = input("New song title: ")
+    print("Song title: " + song_title[0] + "\nRename song? (Y/N)")  # The current title value
+
+    option = input()  # Getting user response
+
+    if option.lower() == "y":  # The user has responded affirmatively
+        new_song_title = input("New song title: ")  # Inquiring the user about the new song title
 
         cursor.execute("UPDATE media SET title = " + "\"" + new_song_title + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()
+        connection.commit()  # Writing the changes to the database
 
         print("Song title updated successfully.")
 
     cursor.execute("SELECT artist FROM media WHERE id = " + str(entry_id[0]))
     song_artist = cursor.fetchone()
 
-    print("Artist: " + song_artist[0] + "\nRename artist? (Y/N)")
-    option = input()
-    if option.lower() == "y":
-        new_song_artist = input("New artist: ")
+    print("Artist: " + song_artist[0] + "\nRename artist? (Y/N)")  # The current artist value
+
+    option = input()  # Getting user response
+
+    if option.lower() == "y":  # The user has responded affirmatively
+        new_song_artist = input("New artist: ")  # Inquiring the user about the new artist
 
         cursor.execute("UPDATE media SET artist = " + "\"" + new_song_artist + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()
+        connection.commit()  # Writing the changes to the database
 
         print("Artist updated successfully.")
 
     cursor.execute("SELECT album FROM media WHERE id = " + str(entry_id[0]))
     song_album = cursor.fetchone()
 
-    print("Album: " + song_album[0] + "\nRename album? (Y/N)")
-    option = input()
-    if option.lower() == "y":
-        new_song_album = input("New album: ")
+    print("Album: " + song_album[0] + "\nRename album? (Y/N)")  # The current album value
+
+    option = input()  # Getting user response
+
+    if option.lower() == "y":  # The user has responded affirmatively
+        new_song_album = input("New album: ")  # Inquiring the user about the new album
 
         cursor.execute("UPDATE media SET album = " + "\"" + new_song_album + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()
+        connection.commit()  # Writing the changes to the database
 
         print("Album updated successfully.")
 
     cursor.execute("SELECT release_date FROM media WHERE id = " + str(entry_id[0]))
     song_release_date = cursor.fetchone()
 
-    print("Release date: " + song_release_date[0] + "\nChange release date? (Y/N)")
-    option = input()
-    if option.lower() == "y":
-        new_release_date = input("New release date: ")
+    print("Release date: " + song_release_date[0] + "\nChange release date? (Y/N)")  # The current release date value
+
+    option = input()  # Getting user response
+
+    if option.lower() == "y":  # The user has responded affirmatively
+        new_release_date = input("New release date: ")  # Inquiring the user about the new release date
 
         cursor.execute("UPDATE media SET release_date = " + "\"" + new_release_date + "\"" + " WHERE id = " +
                        str(entry_id[0]))
-        connection.commit()
+        connection.commit()  # Writing the changes to the database
 
         print("Song release date updated successfully.")
 
     cursor.execute("SELECT tags FROM media WHERE id = " + str(entry_id[0]))
     song_tags = cursor.fetchone()
 
-    print("Song tags: " + song_tags[0] + "\nChange tags? (Y/N)")
-    option = input()
-    if option.lower() == "y":
-        new_song_tags = input("New song tags: ")
+    print("Song tags: " + song_tags[0] + "\nChange tags? (Y/N)")  # The current tags value
+
+    option = input()  # Getting user response
+
+    if option.lower() == "y":  # The user has responded affirmatively
+        new_song_tags = input("New song tags: ")  # Inquiring the user about the new tags
 
         cursor.execute("UPDATE media SET tags = " + "\"" + new_song_tags + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()
+        connection.commit()  # Writing the changes to the database
 
         print("Song tags updated successfully.")
 
 
+def remove_media(media, window=None, gui_instance=None):
+
+    """
+        Removes the media given as parameter from the database and from the media folder.
+
+        :param media: The path to the media file to be removed.
+        :param window: The window which will need to close after database update.
+        :param gui_instance: Specifies whether the method was called from a CLI or from a GUI instance. The latter
+                             means the method will process some GUI-related elements such as widgets.
+    """
+
+    cursor = connection.cursor()
+
+    if media.isnumeric():  # The user has attempted to delete the media file based on its ID in the database
+        cursor.execute("SELECT full_path FROM media WHERE id = " + media)
+
+        full_path = cursor.fetchone()
+
+        if full_path is None:  # The system couldn't find the specified ID
+            print("Error: The specified ID does not exist in the database.")
+            return
+
+        cursor.execute("DELETE FROM media WHERE id = " + media)  # Deleting the record from the database
+
+        connection.commit()  # Writing the changes to the database
+        cursor.close()
+
+        resort_keys(media)  # Re-order all keys after the deleted one
+
+        os.remove(full_path[0].replace("\\", "/"))  # Removes the media file from the media folder
+
+        print("The media file has been removed.")
+
+    else:  # The user is either using the GUI or has provided the filename as parameter
+        full_path = os.path.join(media_folder, os.path.basename(media)).replace("\\", "/")
+
+        if path.exists(full_path):  # (CLI-only) Checking if the provided filename exists
+
+            # Getting the id of the media which will be removed in order to re-order the IDs of the database
+            cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + full_path + "\"")
+            id_value = cursor.fetchone()
+
+            # Deleting the media item record from the database
+            cursor.execute("DELETE FROM media WHERE full_path = " + "\"" + full_path + "\"")
+
+            connection.commit()  # Writing the changes to the database
+            cursor.close()
+
+            resort_keys(id_value[0])  # Re-order all keys after the deleted one
+
+            os.remove(full_path)  # Removes the media file from the media folder
+
+            if gui_instance is not None:  # The method has been fired by a GUI widget
+                window.destroy()  # Closes the remove window
+
+                # Reloading the media list of the root window
+                gui_instance.library_items = []
+                gui_instance.path_frame_parent.destroy()
+                gui_instance.display_media()
+
+            else:  # The method has been fired by using CLI
+                print("The media file has been removed.")
+
+        else:  # (CLI-only) The user has provided an invalid filename
+            print("Error: The specified media file does not exist.")
+
+
+def resort_keys(id_value):
+
+    """
+        Re-orders the keys of the database.
+
+        :param id_value: The deleted key. All keys after this value need to be sorted.
+        :return: None
+    """
+
+    cursor = connection.cursor()
+
+    cursor.execute("UPDATE media SET id = id - 1 WHERE id > " + str(id_value))
+
+    connection.commit()
+
+    cursor.close()
+
+
 def configure_media_folder(sys_arguments):
-    if len(sys_arguments) == 2:
+
+    """
+        CLI-only method. Either displays the current media folder or changes it with the specified value.
+
+        :param sys_arguments: Arguments passed at the command line. Minimum 1 argument needs to be passed for this
+                              method to run. The first argument specifies the name of the command. The 2nd parameter
+                              is optional and specifies the location of the new media folder.
+        :return: None
+    """
+
+    if len(sys_arguments) == 2:  # The user is inquiring about the location of the current media folder
         print("Media folder: " + config_var['MEDIA FOLDER']['folder'])
 
-    elif len(sys_arguments) == 3:
+    elif len(sys_arguments) == 3:  # The user is attempting to change the media folder
         folder_selector(sys_arguments[2])
 
 
-def folder_selector(path=None, gui_instance=None):
+def folder_selector(folder_path=None, gui_instance=None):
 
     """
         Prompts the user to select the media folder.
 
+        :param folder_path: If the application is run in CLI-mode, the user can pass a path as an optional argument to
+                            specify the new location of the media folder.
+        :param gui_instance: Specifies whether the method was called from a CLI or from a GUI instance. The latter
+                             means the method will process some GUI-related elements such as widgets.
+
         :return: None
     """
 
-    if gui_instance is not None:
+    if gui_instance is not None:  # The method has been fired by a GUI widget
         folder = filedialog.askdirectory()  # We will use an OS-specific dialog box call to select the media folder
 
-        config_var.set('MEDIA FOLDER', 'folder', folder)  # Updating the value inside the configuration file
+        if folder != "":  # The user hasn't canceled the operation
+            config_var.set('MEDIA FOLDER', 'folder', folder)  # Updating the value inside the configuration file
+
+            with open('config.ini', 'w') as configfile:
+                config_var.write(configfile)  # Writing the changes to the configuration file
+
+            gui_instance.display_media_folder()  # Updating the media list
+
+            gui_instance.folder_scan()
+
+    else:  # The method has been fired by using CLI
+        config_var.set('MEDIA FOLDER', 'folder', folder_path)  # Updating the value inside the configuration file
 
         with open('config.ini', 'w') as configfile:  # Writing the changes to the configuration file
-            config_var.write(configfile)
-
-        gui_instance.display_media_folder()
-
-        gui_instance.folder_scan()
-
-    else:
-        config_var.set('MEDIA FOLDER', 'folder', path)  # Updating the value inside the configuration file
-
-        with open('config.ini', 'w') as configfile:  # Writing the changes to the configuration file
-            config_var.write(configfile)
+            config_var.write(configfile)  # Writing the changes to the configuration file
 
         print("Media folder updated.")
 
@@ -298,7 +410,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.folder_locator = Label(self.init_frame,
                                     text="Please choose the folder where you'd like to store your media: ")
         # This button will prompt the user to select a media folder
-        self.folder_button = Button(self.init_frame, text="Browse...", command=folder_selector)
+        self.folder_button = Button(self.init_frame, text="Browse...",
+                                    command=lambda: folder_selector(None, self))
         
         self.folder_frame = Frame()  # The frame that will display the current media folder
         self.var = StringVar()  # The value that stores the current media folder's path as a string
@@ -307,7 +420,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.media_folder_label = Label(self.folder_frame, textvariable=self.var)
 
         # The button that allows the user to change the currently selected media folder
-        self.change_folder_button = ttk.Button(self.folder_frame, text="Change...", command=folder_selector)
+        self.change_folder_button = ttk.Button(self.folder_frame, text="Change...",
+                                               command=lambda: folder_selector(None, self))
 
         # The frame that will display all the media content available inside the media folder
         self.media_frame = Frame()
@@ -461,74 +575,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         else:  # The user has attempted a search on an empty string; displaying the entire media list instead
             self.display_media()
 
-    """
-    def add_media(self, file, mode):
-
-        """"""
-            Adds the file specified as parameter to the database.
-
-            :param file: the file to be added to the database
-            :param mode: the mode in which the algorithm runs.
-                         '0' means the user is trying to copy a media file from another source folder.
-                         '1' means the current file is already present in the media folder, but it's not indexed by the
-                         database (this can happen if, for example, the user has manually placed a media file inside
-                         the media folder).
-        """"""
-
-        if file.endswith('.mp3') or file.endswith('.wav'):  # Checking if the specified file is a valid media file
-            assumed_title = ""  # This variable will store the title of the media
-            assumed_artist = ""  # This variable will store the artist of the media
-
-            if "-" in file:
-
-                """"""
-                    Usually, media files use a '-' character to split the title of the media and the artist.
-                    This algorithm will attempt to automatically 'guess' the title and artist of the media if this
-                    character is present.
-                """"""
-
-                if file.split("-")[0].endswith(" "):  # If there is a whitespace before the '-' character, we remove it
-                    assumed_artist = ntpath.basename(file.split("-")[0][:-1])  # The auto-processed artist name
-                else:
-                    assumed_artist = ntpath.basename(file.split("-")[0])
-
-                if file.split("-")[1].startswith(" "):  # If there is a whitespace after the '-' character, we remove it
-                    assumed_title = file.split("-")[1][1:-4]  # The auto-processed media title
-                else:
-                    assumed_title = file.split("-")[1][:-4]
-
-            if not mode:  # The user is attempting to add media files from another directory
-                try:
-                    shutil.copy2(file, media_folder)
-                except Error as e:
-                    print(e)
-
-            # Updating the database
-            cursor = connection.cursor()
-
-            full_path = os.path.join(media_folder, os.path.basename(file)).replace("\\", "/")
-
-            cursor.execute("SELECT COUNT(1) FROM media WHERE full_path = \"" + full_path + "\"")
-            result = int(str(cursor.fetchone())[1])
-
-            if not result:  # The selected file is not present in the database; the program will attempt to add it
-                sql_command = ''' INSERT INTO media(title, artist, album, release_date, tags, full_path)
-                                VALUES (?, ?, ?, ?, ?, ?) '''
-
-                values = (assumed_title, assumed_artist, '', '', '', full_path)
-
-                cursor.execute(sql_command, values)
-
-                connection.commit()
-
-            else:  # The selected file already exists in the database; letting the user know
-                # Updating the label that alerts the user about the presence of the media file
-                self.already_exists.text = "There is already a song with this name in the media folder!"
-                self.update_idletasks()
-
-            self.display_media()
-    """
-
     def display_media(self, search_list=None):
 
         """
@@ -629,13 +675,15 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
                     # Adding the configuration button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Configure",
-                                                     command=lambda media_title=label_entry.get(), path=entry_path[0]:
-                                                     self.configure_media(media_title, path)))
+                                                     command=lambda media_title=label_entry.get(),
+                                                     file_path=entry_path[0]:
+                                                     self.configure_media(media_title, file_path)))
                     self.library_items[-1].grid(row=index, column=4, padx=10, pady=5)
 
                     # Adding the removal button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Remove",
-                                                     command=lambda media_title=label_entry.get(), path=entry_path[0]:
+                                                     command=lambda media_title=label_entry.get(),
+                                                     file_path=entry_path[0]:
                                                      self.remove_media_query(media_title, path)))
                     self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
 
@@ -691,14 +739,14 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
                     # Adding the configuration button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Configure",
-                                                     command=lambda media_title=label_entry.get(), path=i[0]:
-                                                     self.configure_media(media_title, path)))
+                                                     command=lambda media_title=label_entry.get(), file_path=i[0]:
+                                                     self.configure_media(media_title, file_path)))
                     self.library_items[-1].grid(row=index, column=4, padx=10, pady=5)
 
                     # Adding the removal button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Remove",
-                                                     command=lambda media_title=label_entry.get(), path=i[0]:
-                                                     self.remove_media_query(media_title, path)))
+                                                     command=lambda media_title=label_entry.get(), file_path=i[0]:
+                                                     self.remove_media_query(media_title, file_path)))
                     self.library_items[-1].grid(row=index, column=5, padx=10, pady=5)
 
         # Updating the width of the scrollable area
@@ -753,7 +801,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             # Updating the value of the variable that the media folder label will use
             self.var.set("Media folder: " + media_folder)
 
-    def configure_media(self, label_entry, path):
+    def configure_media(self, label_entry, file_path):
 
         """
             Opens a window that allows the user to modify song metadata (such as title, artist, release date etc.)
@@ -764,7 +812,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             will display media based on its metadata).
 
             :param label_entry: Specifies the name of the media item (used for naming the newly created window).
-            :param path: Specifies the path of the media file (used for identifying the correct entry in the database).
+            :param file_path: Specifies the path of the file (used for identifying the correct entry in the database).
             :return: None
         """
 
@@ -782,37 +830,39 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
         # Depending on the selected mode, the contents of the window will change
         mode1_radiobutton = ttk.Radiobutton(radiobutton_frame, text="Display media using metadata tags", variable=var,
-                                            value=0, command=lambda x=metadata_frame, y=filename_frame, z=path,
-                                            window=config_window: self.display_metadata_widgets(x, y, z, window))
+                                            value=0, command=lambda x=metadata_frame, y=filename_frame, z=file_path,
+                                                                    window=config_window:
+                                                                    self.display_metadata_widgets(x, y, z, window))
         mode2_radiobutton = ttk.Radiobutton(radiobutton_frame, text="Display media using filename", variable=var,
-                                            value=1, command=lambda x=metadata_frame, y=filename_frame, z=path,
-                                            window=config_window: self.display_filename_widgets(x, y, z, window))
+                                            value=1, command=lambda x=metadata_frame, y=filename_frame, z=file_path,
+                                                                    window=config_window:
+                                                                    self.display_filename_widgets(x, y, z, window))
 
         # Retrieving the current mode of the media file from the database
         cursor = connection.cursor()
-        cursor.execute("SELECT mode FROM media WHERE full_path = " + "\"" + path + "\"")
+        cursor.execute("SELECT mode FROM media WHERE full_path = " + "\"" + file_path + "\"")
 
         mode = cursor.fetchone()
 
         if int(mode[0]):  # The media file is displayed using its metadata
             var.set("1")
-            self.display_filename_widgets(metadata_frame, filename_frame, path, config_window)
+            self.display_filename_widgets(metadata_frame, filename_frame, file_path, config_window)
         else:  # The media file is displayed using its filename
             var.set("0")
-            self.display_metadata_widgets(metadata_frame, filename_frame, path, config_window)
+            self.display_metadata_widgets(metadata_frame, filename_frame, file_path, config_window)
 
         mode1_radiobutton.pack(side=LEFT, padx=10, pady=10)
         mode2_radiobutton.pack(padx=10, pady=10)
 
         config_window.mainloop()
 
-    def remove_media_query(self, media_title, path):
+    def remove_media_query(self, media_title, file_path):
 
         """
             Prompts the user to remove the selected media file from the list.
 
             :param media_title: The title of the media file to be removed.
-            :param path: The path of the media file to be removed.
+            :param file_path: The path of the media file to be removed.
             :return: None
         """
 
@@ -828,64 +878,14 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         button_frame = Frame(remove_window)
         button_frame.pack()
 
-        remove_button = Button(button_frame, text="Remove media", command=lambda x=path, y=remove_window:
-                               self.remove_media(x, y))
+        remove_button = Button(button_frame, text="Remove media", command=lambda x=file_path, y=remove_window:
+                               remove_media(x, y, self))
         remove_button.grid(row=0, column=0, padx=10, pady=10)
 
         cancel_button = Button(button_frame, text="Cancel", command=remove_window.destroy)
         cancel_button.grid(row=0, column=1, padx=10, pady=10)
 
         remove_window.mainloop()
-
-    def remove_media(self, media, window):
-
-        """
-            Removes the media given as parameter from the database and from the media folder.
-
-            :param media: The path to the media file to be removed.
-            :param window: The window which will need to close after database update.
-        """
-
-        cursor = connection.cursor()
-
-        # Getting the id of the media which will be removed in order to re-order the ID-s of the database
-        cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + media + "\"")
-        id_value = cursor.fetchone()
-
-        # Deleting the media item record from the database
-        cursor.execute("DELETE FROM media WHERE full_path = " + "\"" + media + "\"")
-
-        connection.commit()
-        cursor.close()
-
-        self.resort_keys(id_value[0])  # Re-order all keys after the deleted one
-
-        os.remove(media)  # Removes the media file from the media folder
-
-        window.destroy()  # Closes the remove window
-
-        # Reloading the media list of the root window
-        self.library_items = []
-        self.path_frame_parent.destroy()
-        self.display_media()
-
-    @staticmethod
-    def resort_keys(id_value):
-
-        """
-            Re-orders the keys of the database.
-
-            :param id_value: The deleted key. All keys after this value need to be sorted.
-            :return: None
-        """
-
-        cursor = connection.cursor()
-
-        cursor.execute("UPDATE media SET id = id - 1 WHERE id > " + str(id_value))
-
-        connection.commit()
-
-        cursor.close()
 
     def display_metadata_widgets(self, metadata_frame, filename_frame, media_path, window):
 
@@ -1346,11 +1346,27 @@ class SongStorageCLI:
         if sys.argv[1].lower() == "add_song":
             add_media(sys.argv[2], 0)
 
+        elif sys.argv[1].lower() == "remove_song":
+            remove_media(sys.argv[2])
+
         elif sys.argv[1].lower() == "media_folder":
             configure_media_folder(sys.argv)
 
 
 if __name__ == "__main__":
+
+    # Variables tasked with processing the configuration file of the application
+    config_var = configparser.ConfigParser()  # We will use a config file to store the path of the media folder
+    config_var.read('config.ini')
+
+    connection = connect_to_database()
+
+    # The value that stores the path of the media folder
+    media_folder = config_var['MEDIA FOLDER']['folder']
+
+    menu_var = config_var['RUN-MODE']['run_mode']
+
+    option = ""
 
     if len(sys.argv) == 1:  # If no arguments or options are passed, the application will run in GUI-mode
         SongStorageGUI().mainloop()
