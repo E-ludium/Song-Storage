@@ -16,6 +16,8 @@ from os import path
 import ntpath
 import shutil
 import zipfile
+from pydub import AudioSegment
+from pydub.playback import play
 
 
 def connect_to_database():
@@ -441,6 +443,24 @@ def search_cli(sys_arguments):
         print("\n" + i)
 
 
+def play_media(media):
+    """
+        Plays the media file specified as parameter.
+
+        :param media: The media file to be played.
+        :return: None
+    """
+
+    full_path = os.path.join(media_folder, os.path.basename(media)).replace("\\", "/")
+
+    if full_path.endswith(".mp3"):
+        media_file = AudioSegment.from_mp3(full_path)
+        play(media_file)
+    elif full_path.endswith(".wav"):
+        media_file = AudioSegment.from_wav(full_path)
+        play(media_file)
+
+
 def remove_media(media, window=None, gui_instance=None):
 
     """
@@ -851,7 +871,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                             self.longest_item_length = current_item_length
 
                     # Adding the play button specific to the current media item
-                    self.library_items.append(Button(path_frame_child, text="Play"))
+                    self.library_items.append(Button(path_frame_child, text="Play",
+                                                     command=lambda file_path=entry_path[0]: play_media(file_path)))
                     self.library_items[-1].grid(row=index, column=2, padx=10, pady=5)
 
                     # Adding the info button specific to the current media item
@@ -1555,6 +1576,9 @@ class SongStorageCLI:
             
         elif sys.argv[1].lower() == "search":
             search_cli(sys.argv)
+
+        elif sys.argv[1].lower() == "play":
+            play_media(sys.argv[2])
 
         elif sys.argv[1].lower() == "load_gui":
             SongStorageGUI().mainloop()
