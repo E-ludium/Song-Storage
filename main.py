@@ -707,6 +707,9 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the graphical
         # Savelist-related variables
         self.create_savelist_button = ttk.Button(self.button_frame, text="Create Savelist...",
                                                  command=self.create_savelist)
+
+        self.quit_button = ttk.Button(self.button_frame, text="Exit", command=self.destroy)
+
         self.archive_name = StringVar()
         self.archive_name.set("")
 
@@ -807,6 +810,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the graphical
 
         self.add_music_button.grid(row=0, column=0, padx=10, pady=20)
         self.create_savelist_button.grid(row=0, column=1, padx=10, pady=20)
+        self.quit_button.grid(row=0, column=2, padx=10, pady=20)
 
     def display_media(self, search_list=None):
         """
