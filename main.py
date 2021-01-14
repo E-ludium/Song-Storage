@@ -4,6 +4,7 @@
    Propose: NIP
 """
 
+
 # GUI-related imports
 from tkinter import *
 from tkinter import ttk
@@ -27,7 +28,11 @@ import zipfile
 from pydub import AudioSegment
 from pydub.playback import play
 
+# Library for enabling multithreading
 import _thread
+
+# Library that allows system calls
+import sys
 
 
 # Variables tasked with processing the configuration file of the application
@@ -52,6 +57,9 @@ def connect_to_database():
               "\"Resources\" folder.")
         return False
 
+    if config_var['RUN-MODE']['run_mode'] == "2":  # Debugging mode
+        print("\nSuccessfully connected to the database.")
+
     # The variable storing the SQL command for creating the "media" table
     create_table = """ CREATE TABLE IF NOT EXISTS media (
                         id integer PRIMARY KEY,
@@ -74,6 +82,9 @@ def connect_to_database():
         print("Error: Could not create the table.")
         print(e)
         return False
+
+    if config_var['RUN-MODE']['run_mode'] == "2":  # Debugging mode
+        print("\nThe media table exists or has been created successfully..")
 
     # Returning the connection variable so that it can be used by other features of the application
     return temp_connection
@@ -126,6 +137,10 @@ def add_media(file, mode, gui_instance=None):
 
         else:  # If no "-" character is present in the title of the file, assuming the title is the name of the file
             assumed_title = os.path.splitext(basename_file)[0]
+
+        if config_var['RUN-MODE']['run_mode'] == "2":  # Debugging mode
+            print("\nAssumed title: " + assumed_title)
+            print("Assumed artist: " + assumed_artist)
 
         if not mode:  # The user is attempting to add media files from another directory
             try:
@@ -208,6 +223,9 @@ def add_media(file, mode, gui_instance=None):
 
             return False
 
+        if config_var['RUN-MODE']['run_mode'] == "2":  # Debugging mode
+            print("\nMedia file has been added successfully.")
+
         return True
 
 
@@ -269,13 +287,36 @@ def play_media(media, allow_multiprocessing, gui_instance=None):
 
             return
 
-    elif full_path.endswith(".wav"):
-        media_file = AudioSegment.from_wav(full_path)
-        play(media_file)
+    elif full_path.endswith(".wav"):  # The target file is a .wav media file
+        try:
+            media_file = AudioSegment.from_wav(full_path)
+
+            if allow_multiprocessing:  # If the application runs in loop mode, we can use multithreading
+                _thread.start_new_thread(play, (media_file,))
+
+            else:  # The application runs in only one iteration, no multithreading is possible
+                play(media_file)
+
+        except FileNotFoundError:  # Could not play the media file
+            if gui_instance is not None:  # Application is running in GUI-mode
+                messagebox.showerror("Unable to play file", "Unable to play media file. Please make sure that you have "
+                                     "ffmpeg installed (https://ffmpeg.org/) and that the files \"ffmpeg.exe\", "
+                                     "\"ffplay.exe\" and \"ffprobe.exe\" are also copied in the current folder of the "
+                                     "application.")
+
+            # Application is running in CLI or debugging mode
+            if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                print("\nError: Unable to play media file. Please make sure that you have ffmpeg installed "
+                      "(https://ffmpeg.org/) and that the files \"ffmpeg.exe\", \"ffplay.exe\" and \"ffprobe.exe\" are "
+                      "also copied in the current folder of the application.")
+
+            return
+
+    if config_var['RUN-MODE']['run_mode'] == "2":  # Debugging mode
+        print("\nThe media file is playing.")
 
 
 def remove_media(media, window=None, gui_instance=None):
-
     """
         Removes the media given as parameter from the database and from the media folder.
 
@@ -283,11 +324,14 @@ def remove_media(media, window=None, gui_instance=None):
         :param window: The window which will need to close after database update.
         :param gui_instance: Specifies whether the method was called from a CLI or from a GUI instance. The latter
                              means the method will process some GUI-related elements such as widgets.
+
+        :return True: The method has successfully removed the media file from the media folder and the database.
+        :return False: There was an error when trying to remove the media file.
     """
 
     cursor = connection.cursor()
 
-    if media.isnumeric():  # The user has attempted to delete the media file based on its ID in the database
+    if media.isnumeric():  # CLI-only: The user has attempted to delete the media file based on its ID in the database
         cursor.execute("SELECT full_path FROM media WHERE id = " + media)
 
         full_path = cursor.fetchone()
@@ -296,18 +340,43 @@ def remove_media(media, window=None, gui_instance=None):
             print("Error: The specified ID does not exist in the database.")
             return
 
-        cursor.execute("DELETE FROM media WHERE id = " + media)  # Deleting the record from the database
+        # Attempting to remove the media file record from the database
+        try:
+            cursor.execute("DELETE FROM media WHERE id = " + media)  # Deleting the record from the database
 
-        connection.commit()  # Writing the changes to the database
+            connection.commit()  # Writing the changes to the database
+
+        except Error:  # Database is locked
+            print("\nError when trying to commit changes to database. Make sure another application is not using the "
+                  "database.")
+
+            return False
+
         cursor.close()
 
-        resort_keys(media)  # Re-order all keys after the deleted one
+        # Attempting to re-order the keys after the deleted one
+        if not resort_keys(media):  # Fatal error: database is locked
+            print("\nERROR: DATABASE COULD NOT BE UPDATED. APPLICATION CANNOT WORK AS INTENDED. "
+                  "PLEASE MANUALLY REMOVE ALL MEDIA FILES FROM THE MEDIA FOLDER AND TRY ADDING THEM BACK.")
+            sys.exit()  # Quitting; the application will malfunction until the user manually resets the media folder
 
-        os.remove(full_path[0].replace("\\", "/"))  # Removes the media file from the media folder
+        try:
+            os.remove(full_path[0].replace("\\", "/"))  # Removes the media file from the media folder
 
-        print("The media file has been removed.")
+        except FileNotFoundError:
+            print("\nError: Could not remove the file from the media folder: The file does not exist.")
+            return False
+
+        except PermissionError:
+            print("\nError: Unable to remove file from the media folder. Make sure you haven't selected a "
+                  "write-protected folder. If the issue persists, try changing the media folder and manually removing"
+                  " the media file from the current media folder.")
+            return False
+
+        print("\nThe media file has been removed.")
 
     else:  # The user is either using the GUI or has provided the filename as parameter
+        # Getting the full path of the file (using an app-level convention for slashes)
         full_path = os.path.join(media_folder, os.path.basename(media)).replace("\\", "/")
 
         if path.exists(full_path):  # (CLI-only) Checking if the provided filename exists
@@ -316,18 +385,76 @@ def remove_media(media, window=None, gui_instance=None):
             cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + full_path + "\"")
             id_value = cursor.fetchone()
 
-            # Deleting the media item record from the database
-            cursor.execute("DELETE FROM media WHERE full_path = " + "\"" + full_path + "\"")
+            # Attempting to remove the media file record from the database
+            try:
+                cursor.execute("DELETE FROM media WHERE full_path = " + "\"" + full_path + "\"")
 
-            connection.commit()  # Writing the changes to the database
+                connection.commit()  # Writing the changes to the database
+
+            except Error:  # Database is locked
+                # Application is running in GUI-mode
+                if gui_instance is not None:
+                    messagebox.showerror("Database is locked", "Error when trying to commit changes to database. Make "
+                                                               "sure another application is not using the database.")
+
+                # Application is running in CLI or debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nError when trying to commit changes to database. Make sure another application is not "
+                          "using the database.")
+
+                return False
+
             cursor.close()
 
-            resort_keys(id_value[0])  # Re-order all keys after the deleted one
+            # Attempting to re-order the keys after the deleted one
+            if not resort_keys(id_value[0]):  # Fatal error: database is locked
+                # Application is running in GUI-mode
+                if gui_instance is not None:
+                    messagebox.showerror("Database error", "DATABASE COULD NOT BE UPDATED. APPLICATION CANNOT WORK AS "
+                                         "INTENDED. PLEASE MANUALLY REMOVE ALL MEDIA FILES FROM THE MEDIA FOLDER AND "
+                                         "TRY ADDING THEM BACK.")
+                    # Quitting; the application will malfunction until the user manually resets the media folder
+                    sys.exit()
 
-            os.remove(full_path)  # Removes the media file from the media folder
+                # Application is running in CLI or debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nERROR: DATABASE COULD NOT BE UPDATED. APPLICATION CANNOT WORK AS INTENDED. "
+                          "PLEASE MANUALLY REMOVE ALL MEDIA FILES FROM THE MEDIA FOLDER AND TRY ADDING THEM BACK.")
+                    # Quitting; the application will malfunction until the user manually resets the media folder
+                    sys.exit()
+
+            try:
+                os.remove(full_path)  # Removes the media file from the media folder
+
+            except FileNotFoundError:
+                # Application is running in GUI-mode
+                if gui_instance is not None:
+                    messagebox.showerror("File not found", "The file does not exist.")
+
+                # Application is running in CLI or debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nError: Could not remove the file from the media folder: The file does not exist.")
+
+                return False
+
+            except PermissionError:
+                # Application is running in GUI-mode
+                if gui_instance is not None:
+                    messagebox.showerror("Unable to remove file", "Unable to remove file from the media folder. Make "
+                                         "sure you haven't selected a write-protected folder. If the issue persists, "
+                                         "try changing the media folder and manually removing the media file from the "
+                                         "current media folder.")
+
+                # Application is running in CLI or debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nError: Unable to remove file from the media folder. Make sure you haven't selected a "
+                          "write-protected folder. If the issue persists, try changing the media folder and manually "
+                          "removing the media file from the current media folder.")
+
+                return False
 
             if gui_instance is not None:  # The method has been fired by a GUI widget
-                window.destroy()  # Closes the remove window
+                window.destroy()  # Closes the removal window
 
                 # Reloading the media list of the root window
                 gui_instance.library_items = []
@@ -335,32 +462,44 @@ def remove_media(media, window=None, gui_instance=None):
                 gui_instance.display_media()
 
             else:  # The method has been fired by using CLI
-                print("The media file has been removed.")
+                print("\nThe media file has been removed.")
 
         else:  # (CLI-only) The user has provided an invalid filename
-            print("Error: The specified media file does not exist.")
+            print("\nError: The specified media file does not exist.")
+            return False
+
+    return True
 
 
 def resort_keys(id_value):
-
     """
         Re-orders the keys of the database.
 
         :param id_value: The deleted key. All keys after this value need to be sorted.
-        :return: None
+        :return True: The database keys were succesfully sorted.
+        :return False: Fatal error: The database keys could not be sorted. Application will malfunction until user
+                       manually clears the media folder.
     """
 
     cursor = connection.cursor()
 
-    cursor.execute("UPDATE media SET id = id - 1 WHERE id > " + str(id_value))
+    try:
+        cursor.execute("UPDATE media SET id = id - 1 WHERE id > " + str(id_value))
 
-    connection.commit()
+        connection.commit()
+
+    except Error:  # Database is locked
+        return False  # The error messages will be displayed by the caller method
 
     cursor.close()
 
+    if config_var['RUN-MODE']['run_mode'] == "2":  # Debugging mode
+        print("\nThe database keys were successfully sorted.")
+
+    return True
+
 
 def folder_selector(folder_path=None, gui_instance=None):
-
     """
         Prompts the user to select the media folder.
 
@@ -369,37 +508,65 @@ def folder_selector(folder_path=None, gui_instance=None):
         :param gui_instance: Specifies whether the method was called from a CLI or from a GUI instance. The latter
                              means the method will process some GUI-related elements such as widgets.
 
-        :return: None
+        :return: True: The method has successfully updated the media folder.
+        :return False: The configuration file was already in use or was manually removed; the operation failed.
     """
 
-    global config_var
+    global config_var  # Using the global variable that reads and modifies the configuration file
 
     if gui_instance is not None:  # The method has been fired by a GUI widget
         folder = filedialog.askdirectory()  # We will use an OS-specific dialog box call to select the media folder
 
-        if folder != "":  # The user hasn't canceled the operation
+        if folder != "":  # Checks to see if the user has canceled the operation
             config_var.set('MEDIA FOLDER', 'folder', folder)  # Updating the value inside the configuration file
 
-            with open('config.ini', 'w') as configfile_folder:
-                config_var.write(configfile_folder)  # Writing the changes to the configuration file
-                configfile_folder.close()
+            try:
+                with open('config.ini', 'w') as configfile_folder:
+                    config_var.write(configfile_folder)  # Writing the changes to the configuration file
+                    configfile_folder.close()
+
+            except IOError:
+                messagebox.showerror("Writing to file failed", "Failed to write new value to the configuration file."
+                                     " Please make sure no other applications are interacting with the configuration "
+                                     "file and that \"config.ini\" is located in the folder of the application.")
+
+                # Application is running in debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nError: Failed to write new value to the configuration file. Please make sure no other "
+                          "applications are interacting with the configuration file and that \"config.ini\" is located "
+                          "in the folder of the application.")
+
+                return False
 
             gui_instance.display_media_folder()  # Updating the media list
 
             gui_instance.folder_scan()
 
     else:  # The method has been fired by using CLI
+        if not os.path.exists(folder_path):  # The user has specified an invalid folder
+            print("\nError: The specified directory does not exist.")
+            return False
+
         config_var.set('MEDIA FOLDER', 'folder', folder_path)  # Updating the value inside the configuration file
 
-        with open('config.ini', 'w') as configfile_folder:  # Writing the changes to the configuration file
-            config_var.write(configfile_folder)  # Writing the changes to the configuration file
-            configfile_folder.close()
+        try:
+            with open('config.ini', 'w') as configfile_folder:
+                config_var.write(configfile_folder)  # Writing the changes to the configuration file
+                configfile_folder.close()
+
+        except IOError:
+            print("\nError: Failed to write new value to the configuration file. Please make sure no other "
+                  "applications are interacting with the configuration file and that \"config.ini\" is located "
+                  "in the folder of the application.")
+
+            return False
 
         print("\nMedia folder updated.")
 
+    return True
+
 
 def intersection(list1, list2):
-
     """
         Performs an intersection of the values of the two lists specified as parameters. Returns a list containing
         only the shared values.
@@ -426,67 +593,85 @@ def intersection(list1, list2):
 
 
 def load_cli(gui_instance):
-    gui_instance.destroy()
+    """
+        Loads the application in command-line interface.
 
-    SongStorageCLI(1)
+        :param gui_instance: The graphical user interface instance to be hidden.
+        :return: None
+    """
+
+    gui_instance.destroy()  # Destroying the application graphical window
+
+    SongStorageCLI(1)  # Loading the application in CLI, loop-mode
 
 
 def load_gui():
-
     """
         Loads the graphical user interface of the application.
 
         :return: None
     """
 
-    print("Loading graphical user interface...\n")
+    print("\nLoading graphical user interface...\n")
     SongStorageGUI().mainloop()
 
 
-class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface to the user
+class SongStorageGUI(Tk):  # The GUI class responsible for showing the graphical interface to the user
     def __init__(self):
+        """
+            Initialization method of the class. Loads the main window and all graphical widgets to be used.
 
-        super().__init__()
-        self.title("Song Storage")
-        self.resizable(False, False)
-        self.iconphoto(True, PhotoImage(file="Resources/Icons/AppIcon.png"))
+            :return: None
+        """
 
-        global config_var
+        super().__init__()  # Loading the Tk window instance
 
+        self.title("Song Storage")  # Naming the root window
+        self.resizable(False, False)  # Disabling resizing of the root window
+        self.iconphoto(True, PhotoImage(file="Resources/Icons/AppIcon.png"))  # Loading the icon of the application
+
+        global config_var  # Using the global variable that reads and modifies the configuration file
+
+        # Application's GUI was invoked from a CLI instance; updating the configuration file variable
         if config_var['RUN-MODE']['run_mode'] == "1":
             config_var.set('RUN-MODE', 'run_mode', "0")
 
-            with open('config.ini', 'w') as configfile_gui:
-                config_var.write(configfile_gui)  # Writing the changes to the configuration file
-                configfile_gui.close()
+            try:
+                with open('config.ini', 'w') as configfile_gui:
+                    config_var.write(configfile_gui)  # Writing the changes to the configuration file
+                    configfile_gui.close()
 
+            except IOError:
+                messagebox.showerror("Writing to file failed", "Failed to write new value to the configuration file."
+                                     " Please make sure no other applications are interacting with the configuration "
+                                     "file and that \"config.ini\" is located in the folder of the application.")
+
+                # Application is running in debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nError: Failed to write new value to the configuration file. Please make sure no other "
+                          "applications are interacting with the configuration file and that \"config.ini\" is located "
+                          "in the folder of the application.")
+
+        # The variable that shows the current run-mode of the application
+        # It is used by the radiobuttons in the filemenu
         self.gui_menu_var = StringVar(self, config_var['RUN-MODE']['run_mode'])
         
         """Declaring the variables the GUI will use"""
         self.menubar = Menu()  # The file menu where the user can specify global settings for the application
-        self.filemenu = Menu(self.menubar, tearoff=0)
-        self.runmode_menu = Menu(self.filemenu, tearoff=0)
-        self.runmode_menu.add_radiobutton(label="Graphical User Interface", value=0, variable=self.gui_menu_var)
-        self.runmode_menu.add_radiobutton(label="Command Line Interface", value=1, variable=self.gui_menu_var,
-                                          command=lambda gui=self: load_cli(self))
-        self.runmode_menu.add_radiobutton(label="Debugging Mode (GUI + CLI)", value=2, variable=self.gui_menu_var)
-        self.filemenu.add_cascade(label="Run Mode", menu=self.runmode_menu)
-        self.menubar.add_cascade(label="File", menu=self.filemenu)
-
-        self.config(menu=self.menubar)
-
-        self.init_frame = Frame()  # The main frame of the application
-        self.folder_locator = Label(self.init_frame,
-                                    text="Please choose the folder where you'd like to store your media: ")
-        # This button will prompt the user to select a media folder
-        self.folder_button = Button(self.init_frame, text="Browse...",
-                                    command=lambda: folder_selector(None, self))
+        self.filemenu = Menu(self.menubar, tearoff=0)  # Submenu for the file menu
+        self.runmode_menu = Menu(self.filemenu, tearoff=0)  # Submenu showing the current run-mode of the application
         
         self.folder_frame = Frame()  # The frame that will display the current media folder
-        self.var = StringVar()  # The value that stores the current media folder's path as a string
+
+        # The value that stores the current media folder's path as a string
+        self.var = StringVar(self, "Please choose the folder where you'd like to store your media:")
 
         # The label that will display the current media folder
         self.media_folder_label = Label(self.folder_frame, textvariable=self.var)
+
+        # This button will prompt the user to select a media folder
+        self.folder_button = Button(self.folder_frame, text="Browse...",
+                                    command=lambda: folder_selector(None, self))
 
         # The button that allows the user to change the currently selected media folder
         self.change_folder_button = ttk.Button(self.folder_frame, text="Change...",
@@ -507,7 +692,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.search_entry = ttk.Entry(self.search_frame, width=50)
         self.search_button = ttk.Button(self.search_frame, text="Search",
                                         command=lambda entry=self.search_entry: self.search(self.search_entry))
-        self.advanced_search_button = ttk.Button(self.search_frame, text="Advanced Search...")
+        # self.advanced_search_button = ttk.Button(self.search_frame, text="Advanced Search...")
 
         self.header = Label(self.media_frame, text="Available media:")
 
@@ -540,22 +725,32 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         print("Graphical user interface loaded.")
 
     def process_widgets(self):
-
         """
             Processes the widgets declared in the initialization method of the class.
 
             :return: None
         """
 
-        self.init_frame.pack()
+        self.runmode_menu.add_radiobutton(label="Graphical User Interface", value=0, variable=self.gui_menu_var,
+                                          command=self.disable_debugging_mode)
+        self.runmode_menu.add_radiobutton(label="Command Line Interface", value=1, variable=self.gui_menu_var,
+                                          command=lambda gui=self: load_cli(self))
+        self.runmode_menu.add_radiobutton(label="Debugging Mode (GUI + CLI)", value=2, variable=self.gui_menu_var,
+                                          command=self.enable_debugging_mode)
+
+        # Placing all the submenus
+        self.filemenu.add_cascade(label="Run Mode", menu=self.runmode_menu)
+        self.menubar.add_cascade(label="File", menu=self.filemenu)
+
+        self.config(menu=self.menubar)  # Indicating that the "menubar" variable is the filemenu of the application
 
         self.folder_frame.pack()
 
-        self.folder_locator.pack(side=LEFT)
-
-        self.folder_button.pack(side=LEFT)
+        # self.folder_locator.pack(side=LEFT, padx=10, pady=10)
 
         self.media_folder_label.pack(side=LEFT, padx=10, pady=10)
+
+        self.folder_button.pack(side=LEFT)
 
         self.path_frame_parent.pack(side=LEFT)
 
@@ -564,16 +759,13 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.search_frame.pack()
         self.search_entry.grid(row=0, column=0, padx=10, pady=20)
         self.search_button.grid(row=0, column=1, padx=5)
-        self.advanced_search_button.grid(row=0, column=2, padx=5)
+        # self.advanced_search_button.grid(row=0, column=2, padx=5)
 
         self.media_frame.pack()
 
         self.button_frame.pack()
 
-        self.header.pack(pady=10)
-
     def folder_scan(self):
-
         """
             Scans the currently selected media folder.
             For every media file it finds, it checks if the specified file is indexed to the database.
@@ -602,7 +794,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.display_media()
 
     def load_interface(self):
-
         """
             Loads the GUI of the application.
 
@@ -611,13 +802,13 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
         self.display_media_folder()
 
-        self.folder_scan()
+        if media_folder != "":
+            self.folder_scan()
 
         self.add_music_button.grid(row=0, column=0, padx=10, pady=20)
         self.create_savelist_button.grid(row=0, column=1, padx=10, pady=20)
 
     def display_media(self, search_list=None):
-
         """
             The core of the program's GUI.
             Displays the entire list of media files to the user, or the list containing the search results for a
@@ -628,11 +819,14 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             :return: None
         """
 
-        global config_var
+        global config_var  # Using the global variable that reads and modifies the configuration file
 
         cursor = connection.cursor()
 
         index = 0  # Using an index to determine the correct row in which every media item needs to be placed
+
+        if media_folder != "":
+            self.header.pack(pady=10)
 
         # Resetting the media frame
         self.library_items = []
@@ -713,9 +907,11 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                                                      play_media(file_path, 1, self)))
                     self.library_items[-1].grid(row=index, column=2, padx=10, pady=5)
 
+                    """
                     # Adding the info button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Info"))
                     self.library_items[-1].grid(row=index, column=3, padx=10, pady=5)
+                    """
 
                     # Adding the configuration button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Configure",
@@ -779,9 +975,11 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                     self.library_items.append(Button(path_frame_child, text="Play"))
                     self.library_items[-1].grid(row=index, column=2, padx=10, pady=5)
 
+                    """
                     # Adding the info button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Info"))
                     self.library_items[-1].grid(row=index, column=3, padx=10, pady=5)
+                    """
 
                     # Adding the configuration button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Configure",
@@ -836,8 +1034,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             # Packing the "Back" button, which quits the searching session
             self.back_button.grid(row=0, column=0, padx=5)
             self.search_entry.grid(row=0, column=1, padx=10, pady=20)
-            self.searh_button.grid(row=0, column=2, padx=5)
-            self.advanced_search_button.grid(row=0, column=3, padx=5)
+            self.search_button.grid(row=0, column=2, padx=5)
+            # self.advanced_search_button.grid(row=0, column=3, padx=5)
 
             self.display_media(files)  # Displaying the media list containing only the search results
 
@@ -860,7 +1058,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.canvas.configure(scrollregion=self.canvas.bbox("all"), width=longest_item_length * 7 + 250, height=200)
         
     def display_media_folder(self):
-
         """
             This method makes the media folder label display the correct folder.
 
@@ -874,7 +1071,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         media_folder = config_var['MEDIA FOLDER']['folder']
 
         if media_folder != "":  # Checking if the user has previously selected a media folder
-            self.folder_locator.pack_forget()
+            # self.folder_locator.pack_forget()
             self.folder_button.pack_forget()
             self.change_folder_button.pack(side=LEFT, padx=(0, 10))
 
@@ -882,7 +1079,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             self.var.set("Media folder: " + media_folder)
 
     def configure_media(self, label_entry, file_path):
-
         """
             Opens a window that allows the user to modify song metadata (such as title, artist, release date etc.)
             It also allows the user to specify whether the media file should be displayed using the provided metadata
@@ -937,7 +1133,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         config_window.mainloop()
 
     def remove_media_query(self, media_title, file_path):
-
         """
             Prompts the user to remove the selected media file from the list.
 
@@ -968,7 +1163,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         remove_window.mainloop()
 
     def display_metadata_widgets(self, metadata_frame, filename_frame, media_path, window):
-
         """
             Displays the body of the configuration window. In this mode, the contents of the body will not allow the
             user to modify the name of the file.
@@ -1053,7 +1247,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         cancel_button.grid(row=5, column=1, padx=10, pady=10)
 
     def display_filename_widgets(self, metadata_frame, filename_frame, media_path, window):
-
         """
             Displays the body of the configuration window. In this mode, the contents of the body will allow the user to
             modify the name of the file.
@@ -1144,7 +1337,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
     def update_entry(self, path_value, run_mode, title_value, artist_value, album_value, release_date_value, tags_value,
                      mode, media_path, window):
-
         """
             Modifies the specified record of the database with respect to the values passed as arguments.
 
@@ -1158,7 +1350,9 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             :param mode: The mode of the media file.
             :param media_path: The (new) path of the media file.
             :param window: The window which will need to close after database update.
-            :return: None
+
+            :return: True: The database was successfully updated.
+            :return: False: Could not write changes to the database.
         """
 
         new_path = ""  # The variable storing the new path for the media file (if necessary)
@@ -1170,13 +1364,21 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         # We will use the "media_path" argument of the method to determine which database record needs to be updated
         cursor = connection.cursor()
 
-        cursor.execute("UPDATE media SET title = " + "\"" + title_value.get() + "\"" + ", artist = " + "\"" +
-                       artist_value.get() + "\"" + ", album = " + "\"" + album_value.get() + "\"" + ", release_date = "
-                       + "\"" + release_date_value.get() + "\"" + ", tags = " + "\"" + tags_value.get() + "\"" +
-                       ", mode = " + str(mode) + " WHERE full_path = " + "\"" + media_path + "\"")
-        if run_mode:  # Updating the full path in the database as well
-            cursor.execute("UPDATE media SET full_path = " + "\"" + new_path + "\"" + " WHERE full_path = " + "\"" +
-                           media_path + "\"")
+        try:
+            cursor.execute("UPDATE media SET title = " + "\"" + title_value.get() + "\"" + ", artist = " + "\"" +
+                           artist_value.get() + "\"" + ", album = " + "\"" + album_value.get() + "\"" +
+                           ", release_date = " + "\"" + release_date_value.get() + "\"" + ", tags = " + "\"" +
+                           tags_value.get() + "\"" + ", mode = " + str(mode) + " WHERE full_path = " + "\""
+                           + media_path + "\"")
+            if run_mode:  # Updating the full path in the database as well
+                cursor.execute("UPDATE media SET full_path = " + "\"" + new_path + "\"" + " WHERE full_path = " + "\"" +
+                               media_path + "\"")
+
+        except Error:
+            messagebox.showerror("Database is locked", "Could not write changes to the database. Make sure no other "
+                                 "application is currently modifying the database.")
+
+            return False
 
         connection.commit()
         cursor.close()
@@ -1188,17 +1390,14 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.path_frame_parent.destroy()
         self.display_media()
 
-    def add_media_dialog(self):
+        return True
 
+    def add_media_dialog(self):
         """
             Prompts the user to select a media file to be added to the media list.
 
             :return: None
         """
-
-        # Resetting the alert label
-        self.already_exists.text = ""
-        self.update_idletasks()
 
         file = filedialog.askopenfilename()
 
@@ -1213,7 +1412,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                 self.configure_media(os.path.basename(file), full_path)
 
     def create_savelist(self):
-
         """
             Displays a window that prompts the user to create a custom savelist based on certain criteria.
 
@@ -1294,7 +1492,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         savelist_window.mainloop()
 
     def on_enter_trace(self, button, *_):
-
         """
             This function scans the archive name entry. If the entry is empty, the user cannot proceed to create a
             Savelist archive.
@@ -1302,6 +1499,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             :param button: The button whose state will change depending on the completion of the archive name entry.
             :param _: Partial methods send multiple variables as parameters. We do not need them for the purpose of this
             method.
+
             :return: None
         """
 
@@ -1311,7 +1509,6 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             button.configure(state="enabled")
 
     def generate_savelist(self, title, artist, album, release_year, tags, archive, window):
-
         """
             Creates a .zip file using the contents specified by the user in the entry fields. The .zip file is placed
             in the media folder. The algorithm attempts to create the intersection of each SQL result from the provided
@@ -1325,6 +1522,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             :param tags: The contents of the tags entry.
             :param archive: The contents of the archive entry.
             :param window: The window which will need to close after archive creation.
+
             :return: None
         """
 
@@ -1348,19 +1546,22 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
                     valid_title_files.append(i[0])
 
             if artist.get() != "":  # The user has specified a custom criterion for the artist
-                cursor.execute("SELECT full_path FROM media WHERE artist = " + "\"" + artist.get() + "\"")
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(artist, " + "\"" + artist.get() + "\"" +
+                               ") > 0")
 
                 for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
                     valid_artist_files.append(i[0])
 
             if album.get() != "":  # The user has specified a custom criterion for the album
-                cursor.execute("SELECT full_path FROM media WHERE album = " + "\"" + album.get() + "\"")
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(album, " + "\"" + album.get() + "\"" +
+                               ") > 0")
 
                 for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
                     valid_album_files.append(i[0])
 
             if release_year.get() != "":  # The user has specified a custom criterion for the release year
-                cursor.execute("SELECT full_path FROM media WHERE release_date = " + "\"" + release_year.get() + "\"")
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(release_date, " + "\"" + release_year.get() +
+                               "\") > 0")
 
                 for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
                     valid_release_year_files.append(i[0])
@@ -1386,25 +1587,94 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
         window.destroy()  # Closing the Savelist window
 
+    @staticmethod
+    def enable_debugging_mode():
+        """
+            Updates the configuration file to indicate the application's methods that debugging mode is now enabled.
 
-class SongStorageCLI:
+            :return: None
+        """
+
+        global config_var  # Using the global variable that reads and modifies the configuration file
+
+        config_var.set('RUN-MODE', 'run_mode', "2")
+
+        try:
+            with open('config.ini', 'w') as configfile_gui:
+                config_var.write(configfile_gui)  # Writing the changes to the configuration file
+                configfile_gui.close()
+
+        except IOError:
+            messagebox.showerror("Writing to file failed", "Failed to write new value to the configuration file."
+                                 " Please make sure no other applications are interacting with the configuration "
+                                 "file and that \"config.ini\" is located in the folder of the application.")
+
+            # Application is running in debugging mode
+            if config_var['RUN-MODE']['run_mode'] == "2":
+                print("\nError: Failed to write new value to the configuration file. Please make sure no other "
+                      "applications are interacting with the configuration file and that \"config.ini\" is located "
+                      "in the folder of the application.")
+
+    @staticmethod
+    def disable_debugging_mode():
+        """
+            Updates the configuration file to indicate the application's methods that debugging mode is now disabled.
+
+            :return: None
+        """
+
+        global config_var  # Using the global variable that reads and modifies the configuration file
+
+        config_var.set('RUN-MODE', 'run_mode', "0")
+
+        try:
+            with open('config.ini', 'w') as configfile_gui:
+                config_var.write(configfile_gui)  # Writing the changes to the configuration file
+                configfile_gui.close()
+
+        except IOError:
+            messagebox.showerror("Writing to file failed", "Failed to write new value to the configuration file."
+                                 " Please make sure no other applications are interacting with the configuration "
+                                 "file and that \"config.ini\" is located in the folder of the application.")
+
+            # Application is running in debugging mode
+            if config_var['RUN-MODE']['run_mode'] == "2":
+                print("\nError: Failed to write new value to the configuration file. Please make sure no other "
+                      "applications are interacting with the configuration file and that \"config.ini\" is located "
+                      "in the folder of the application.")
+
+
+class SongStorageCLI:  # The class responsible for running the application in the console
     def __init__(self, run_mode):
-        global config_var
+        """
+            Initialization method of the class. Checks whether application is running in loop mode or a single
+            iteration.
+
+            :return: None
+        """
+
+        global config_var  # Using the global variable that reads and modifies the configuration file
 
         self.run_mode = run_mode
 
-        if self.run_mode:
+        if self.run_mode:  # The application is running in loop mode
             config_var.set('RUN-MODE', 'run_mode', "1")
 
-            with open('config.ini', 'w') as configfile_cli:
-                config_var.write(configfile_cli)  # Writing the changes to the configuration file
-                configfile_cli.close()
+            try:
+                with open('config.ini', 'w') as configfile_cli:
+                    config_var.write(configfile_cli)  # Writing the changes to the configuration file
+                    configfile_cli.close()
 
-            print("\nSong Storage v1.1 - 01.14.2021")
+            except IOError:
+                print("\nError: Failed to write new value to the configuration file. Please make sure no other "
+                      "applications are interacting with the configuration file and that \"config.ini\" is located "
+                      "in the folder of the application.")
+
+            print("\nSong Storage\n")
             print("Please type a command.\nType \"help\" for a list of commands.\nType \"quit\" to exit the program. "
                   "Type \"load_gui\" to go back to the graphical user interface version.")
 
-            while self.run_mode:
+            while self.run_mode:  # The application will continue to listen for user commands
                 command = input("\nInsert command: ")
                 self.process_command(command.lower())
 
@@ -1444,8 +1714,19 @@ class SongStorageCLI:
                       "Use command \"Help\" for a list of available commands.")
 
     def process_command(self, command):
-        tokenized_command = command.split()
+        """
+            Processes and executes the command specified by the user.
 
+            :param command: The command to be executed.
+
+            :return: None
+        """
+
+        tokenized_command = command.split()  # Splitting the command and the arguments into separate list elements
+
+        # In order to save a lot of code writing, we are making the command appear the same as the ones from single
+        # iteration modes. This way, the same method that handles the commands in single iteration mode is now able
+        # to process commands from the looped run mode as well.
         sys_argv_emulation = tokenized_command.copy()
         sys_argv_emulation.insert(0, "filler argument")
 
@@ -1489,7 +1770,6 @@ class SongStorageCLI:
 
     @staticmethod
     def display_help_cli():
-
         """
             Displays a help message containing all commands of the application.
 
@@ -1527,7 +1807,6 @@ class SongStorageCLI:
 
     @staticmethod
     def configure_media(file):
-
         """
             This is the method used by the CLI for modifying media metadata.
 
@@ -1664,7 +1943,6 @@ class SongStorageCLI:
 
     @staticmethod
     def display_media_cli():
-
         """
             Dedicated method for displaying the media list in command-line interfaces. On each line, the output displays
             one item from the media list, followed by its ID in the database. The algorithm only displays media items
@@ -1673,7 +1951,7 @@ class SongStorageCLI:
             :return: None
         """
 
-        global config_var
+        global config_var  # Using the global variable that reads and modifies the configuration file
 
         cursor = connection.cursor()
         count = 0  # The total amount of items displayed
@@ -1782,13 +2060,12 @@ class SongStorageCLI:
 
     @staticmethod
     def configure_media_folder(arguments):
-
         """
             CLI-only method. Either displays the current media folder or changes it to the specified value.
 
             :param arguments: Arguments passed at the command line. Minimum 1 argument needs to be passed for this
-                                  method to run. The first argument specifies the name of the command. The 2nd parameter
-                                  is optional and specifies the location of the new media folder.
+                              method to run. The first argument specifies the name of the command. The 2nd parameter
+                              is optional and specifies the location of the new media folder.
             :return: None
         """
 
