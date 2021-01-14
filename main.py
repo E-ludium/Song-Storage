@@ -4,20 +4,37 @@
    Propose: NIP
 """
 
+# GUI-related imports
 from tkinter import *
 from tkinter import ttk
 from tkinter import filedialog
+from tkinter import messagebox
 from functools import partial
+
+# Specialized tools for working with databases and configuration files
 import configparser
 import sqlite3
 from sqlite3 import Error
+
+# Specialized methods for working with files and directories
 import os
 from os import path
 import ntpath
 import shutil
 import zipfile
+
+# 3rd party library for playing audio files
 from pydub import AudioSegment
 from pydub.playback import play
+
+import _thread
+
+
+# Variables tasked with processing the configuration file of the application
+config_var = configparser.ConfigParser()  # We will use a config file to store the path of the media folder
+config_var.read('config.ini')
+
+option = ""  # Variable that will store user choice in CLI-commands that require a "Yes" or "No" answer
 
 
 def connect_to_database():
@@ -30,9 +47,10 @@ def connect_to_database():
     # Attempting a connection to the database
     try:
         temp_connection = sqlite3.connect('Resources/media.db')
-    except Error as e:
-        print(e)
-        return
+    except Error:
+        print("Error: Could not connect to the database. Make sure the file \"media.db\" is located inside the "
+              "\"Resources\" folder.")
+        return False
 
     # The variable storing the SQL command for creating the "media" table
     create_table = """ CREATE TABLE IF NOT EXISTS media (
@@ -53,7 +71,9 @@ def connect_to_database():
         temp_connection.commit()
         cursor.close()
     except Error as e:
+        print("Error: Could not create the table.")
         print(e)
+        return False
 
     # Returning the connection variable so that it can be used by other features of the application
     return temp_connection
@@ -70,16 +90,22 @@ def add_media(file, mode, gui_instance=None):
                      database (this can happen if, for example, the user has manually placed a media file inside
                      the media folder).
         :param gui_instance: Specifies whether the method was called from a CLI or from a GUI instance. The latter
-                             means the method will process some GUI-related elements such as widgets.
+                             means the method will process some GUI-related elements such as widgets or windows.
+
+        :return True: The method has successfully added the media file both to the media folder and to the database.
+        :return False: There was an error when trying to add the media file, or the file already exists.
     """
 
     global option  # Using the global variable that specifies user choice (typically "Yes" or "No" choices)
+    global config_var  # Using the global variable that reads and modifies the configuration file
 
-    if file.endswith('.mp3') or file.endswith('.wav'):  # Checking if the specified file is a valid media file
-        assumed_title = ""  # This variable will store the title of the media
+    basename_file = os.path.basename(file)
+
+    # Checking if the specified file is a valid media file
+    if basename_file.endswith('.mp3') or basename_file.endswith('.wav'):
         assumed_artist = ""  # This variable will store the artist of the media
 
-        if "-" in file:
+        if "-" in basename_file:
 
             """ 
                 Usually, media files use a '-' character to split the title of the media and the artist.
@@ -87,42 +113,73 @@ def add_media(file, mode, gui_instance=None):
                 character is present.
             """
 
-            if file.split("-")[0].endswith(" "):  # If there is a whitespace before the '-' character, we remove it
-                assumed_artist = ntpath.basename(file.split("-")[0][:-1])  # The auto-processed artist name
+            # If there is a whitespace before the '-' character, we remove it
+            if basename_file.split("-")[0].endswith(" "):
+                assumed_artist = basename_file.split("-")[0][:-1]  # The auto-processed artist name
             else:
-                assumed_artist = ntpath.basename(file.split("-")[0])
+                assumed_artist = basename_file.split("-")[0]
 
             if file.split("-")[1].startswith(" "):  # If there is a whitespace after the '-' character, we remove it
-                assumed_title = file.split("-")[1][1:-4]  # The auto-processed media title
+                assumed_title = basename_file.split("-")[1][1:-4]  # The auto-processed media title
             else:
-                assumed_title = file.split("-")[1][:-4]
+                assumed_title = basename_file.split("-")[1][:-4]
+
+        else:  # If no "-" character is present in the title of the file, assuming the title is the name of the file
+            assumed_title = os.path.splitext(basename_file)[0]
 
         if not mode:  # The user is attempting to add media files from another directory
             try:
-                shutil.copy2(file, media_folder)
-            except Error as e:
-                print(e)
+                shutil.copy2(file, media_folder)  # Copying the source file to the media folder
+
+            except PermissionError:  # Application does not have permission to write in the media folder
+                # Application is running in GUI-mode
+                if gui_instance is not None:
+                    messagebox.showerror("Unable to copy file", "Unable to copy file to media folder. Make sure you "
+                                         "haven't selected a write-protected folder.")
+
+                # Application is running in CLI or debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nError: Unable to copy file to media folder. Make sure you haven't selected a "
+                          "write-protected folder.")
+
+                return False
 
         # Updating the database
         cursor = connection.cursor()
 
+        # Getting the full path of the file (using an app-level convention for slashes)
         full_path = os.path.join(media_folder, os.path.basename(file)).replace("\\", "/")
 
         cursor.execute("SELECT COUNT(1) FROM media WHERE full_path = \"" + full_path + "\"")
         result = int(str(cursor.fetchone())[1])
 
-        if not result:  # The selected file is not present in the database; the program will attempt to add it
+        if not result:  # The selected file is not present in the database
             sql_command = ''' INSERT INTO media(title, artist, album, release_date, tags, full_path)
                             VALUES (?, ?, ?, ?, ?, ?) '''
 
             values = (assumed_title, assumed_artist, '', '', '', full_path)
 
-            cursor.execute(sql_command, values)
+            try:  # Attempting to add the media file to the database
+                cursor.execute(sql_command, values)
 
-            connection.commit()
+                connection.commit()
+
+            except Error:  # Database is locked
+                # Application is running in GUI-mode
+                if gui_instance is not None:
+                    messagebox.showerror("Database is locked", "Error when trying to commit changes to database. Make "
+                                         "sure another application is not using the database.")
+
+                # Application is running in CLI or debugging mode
+                if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                    print("\nError when trying to commit changes to database. Make sure another application is not "
+                          "using the database.")
+
+                return False
 
             if gui_instance is not None:  # The method has been fired by a GUI widget
                 gui_instance.display_media()  # Updating the media list
+
             else:  # The method has been fired by using CLI
                 cursor.execute("SELECT id FROM media WHERE full_path = \"" + full_path + "\"")
                 new_id = cursor.fetchone()
@@ -132,8 +189,9 @@ def add_media(file, mode, gui_instance=None):
 
                 option = input()  # Getting user response
                 if option.lower() == "y":  # The user has responded affirmatively
-                    configure_media(full_path)
-                elif option.lower() == "n":  # The user has responded negatively
+                    SongStorageCLI.configure_media(full_path)
+
+                else:  # The user has responded negatively
                     print("\nThe auto-processing tool assumed that the name of the song is \"" + assumed_title + "\" " +
                           "and that the name of the artist is \"" + assumed_artist + "\".\nYou can always change " +
                           "these values, as well as other metadata information, by using the \"Modify_data " +
@@ -142,320 +200,75 @@ def add_media(file, mode, gui_instance=None):
 
         else:  # The selected file already exists in the database; letting the user know
             if gui_instance is not None:  # The method has been fired by a GUI widget
-                # Updating the label that alerts the user about the presence of the media file
-                gui_instance.already_exists.text = "There is already a song with this name in the media folder!"
-                gui_instance.update_idletasks()
+                messagebox.showinfo("Media file already exists",
+                                    "The selected file already exists in the media folder.")
+
             else:  # The method has been fired by using CLI
                 print("There is already a song with this name in the media folder!")
 
+            return False
 
-def configure_media(file):
+        return True
 
+
+def play_media(media, allow_multiprocessing, gui_instance=None):
     """
-        This is the method used by the CLI for modifying media metadata.
+        Plays the media file specified as parameter.
 
-        :param file: The media file to be altered.
+        :param media: The media file to be played.
+        :param allow_multiprocessing: Checks whether application can spawn a new thread to play music in background.
+        :param gui_instance: Specifies whether the method was called from a CLI or from a GUI instance. The latter
+                             means the method will process some GUI-related elements such as widgets or windows.
         :return: None
     """
 
-    global option  # Using the global variable that specifies user choice (typically "Yes" or "No" choices)
     cursor = connection.cursor()
 
-    if file.isnumeric():  # The user has attempted to configure the media file based on its ID in the database
-        cursor.execute("SELECT full_path FROM media WHERE id = " + file)
+    # CLI-only method: The user has attempted to play the media file based on its ID in the database
+    if media.isnumeric():
+        cursor.execute("SELECT full_path FROM media WHERE id = " + media)
 
-        full_path_cursor = cursor.fetchone()
+        full_path = cursor.fetchone()
 
-        if full_path_cursor is None:  # The system couldn't find the specified ID
+        if full_path is None:  # The system couldn't find the specified ID
             print("\nError: The specified ID does not exist in the database.")
             return
 
-        full_path = full_path_cursor[0]
+        full_path = full_path[0]
 
-    else:  # The user is either using the GUI or has provided the filename as parameter
-        full_path = os.path.join(media_folder, os.path.basename(file)).replace("\\", "/")
+    else:  # The method is fired by the GUI or the user has attempted to play the media file by using its name
+        full_path = os.path.join(media_folder, os.path.basename(media)).replace("\\", "/")
 
         if not path.exists(full_path):  # (CLI-only) The user has provided an invalid filename
             print("\nError: The specified media file does not exist.")
             return
 
-    # Processing the media file in the database
-    cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + full_path + "\"")
+    # Attempting to play the media file
+    if full_path.endswith(".mp3"):  # The target file is an .mp3 media file
+        try:
+            media_file = AudioSegment.from_mp3(full_path)
+
+            if allow_multiprocessing:  # If the application runs in loop mode, we can use multithreading
+                _thread.start_new_thread(play, (media_file,))
+
+            else:  # The application runs in only one iteration, no multithreading is possible
+                play(media_file)
+
+        except FileNotFoundError:  # Could not play the media file
+            if gui_instance is not None:  # Application is running in GUI-mode
+                messagebox.showerror("Unable to play file", "Unable to play media file. Please make sure that you have "
+                                     "ffmpeg installed (https://ffmpeg.org/) and that the files \"ffmpeg.exe\", "
+                                     "\"ffplay.exe\" and \"ffprobe.exe\" are also copied in the current folder of the "
+                                     "application.")
+
+            # Application is running in CLI or debugging mode
+            if config_var['RUN-MODE']['run_mode'] == "1" or config_var['RUN-MODE']['run_mode'] == "2":
+                print("\nError: Unable to play media file. Please make sure that you have ffmpeg installed "
+                      "(https://ffmpeg.org/) and that the files \"ffmpeg.exe\", \"ffplay.exe\" and \"ffprobe.exe\" are "
+                      "also copied in the current folder of the application.")
+
+            return
 
-    entry_id = cursor.fetchone()
-
-    # For each column in the database, we will present the user the current value for the media item and we will
-    # ask them if they want to update this value.
-    print("\nFilename: " + ntpath.basename(full_path) + "\nRename file? (Y/N)")  # The current full_path value
-
-    option = input()  # Getting user response
-
-    if option.lower() == "y":  # The user has responded affirmatively
-        filename = input("\nNew filename: ")  # Inquiring the user about the new filename
-
-        new_path = os.path.join(os.path.dirname(full_path), filename).replace("\\", "/")  # New filename
-        os.rename(full_path, new_path)  # Renaming the file
-
-        cursor.execute("UPDATE media SET full_path = " + "\"" + new_path + "\"" + " WHERE full_path = " + "\"" +
-                       full_path + "\"")
-        connection.commit()  # Writing the changes to the database
-
-        print("\nFile renamed successfully.")
-
-    cursor.execute("SELECT title FROM media WHERE id = " + str(entry_id[0]))
-    song_title = cursor.fetchone()
-
-    print("\nSong title: " + song_title[0] + "\nRename song? (Y/N)")  # The current title value
-
-    option = input()  # Getting user response
-
-    if option.lower() == "y":  # The user has responded affirmatively
-        new_song_title = input("\nNew song title: ")  # Inquiring the user about the new song title
-
-        cursor.execute("UPDATE media SET title = " + "\"" + new_song_title + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()  # Writing the changes to the database
-
-        print("\nSong title updated successfully.")
-
-    cursor.execute("SELECT artist FROM media WHERE id = " + str(entry_id[0]))
-    song_artist = cursor.fetchone()
-
-    print("\nArtist: " + song_artist[0] + "\nRename artist? (Y/N)")  # The current artist value
-
-    option = input()  # Getting user response
-
-    if option.lower() == "y":  # The user has responded affirmatively
-        new_song_artist = input("\nNew artist: ")  # Inquiring the user about the new artist
-
-        cursor.execute("UPDATE media SET artist = " + "\"" + new_song_artist + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()  # Writing the changes to the database
-
-        print("\nArtist updated successfully.")
-
-    cursor.execute("SELECT album FROM media WHERE id = " + str(entry_id[0]))
-    song_album = cursor.fetchone()
-
-    print("\nAlbum: " + song_album[0] + "\nRename album? (Y/N)")  # The current album value
-
-    option = input()  # Getting user response
-
-    if option.lower() == "y":  # The user has responded affirmatively
-        new_song_album = input("\nNew album: ")  # Inquiring the user about the new album
-
-        cursor.execute("UPDATE media SET album = " + "\"" + new_song_album + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()  # Writing the changes to the database
-
-        print("\nAlbum updated successfully.")
-
-    cursor.execute("SELECT release_date FROM media WHERE id = " + str(entry_id[0]))
-    song_release_date = cursor.fetchone()
-
-    print("\nRelease date: " + song_release_date[0] + "\nChange release date? (Y/N)")  # The current release date value
-
-    option = input()  # Getting user response
-
-    if option.lower() == "y":  # The user has responded affirmatively
-        new_release_date = input("\nNew release date: ")  # Inquiring the user about the new release date
-
-        cursor.execute("UPDATE media SET release_date = " + "\"" + new_release_date + "\"" + " WHERE id = " +
-                       str(entry_id[0]))
-        connection.commit()  # Writing the changes to the database
-
-        print("\nSong release date updated successfully.")
-
-    cursor.execute("SELECT tags FROM media WHERE id = " + str(entry_id[0]))
-    song_tags = cursor.fetchone()
-
-    print("\nSong tags: " + song_tags[0] + "\nChange tags? (Y/N)")  # The current tags value
-
-    option = input()  # Getting user response
-
-    if option.lower() == "y":  # The user has responded affirmatively
-        new_song_tags = input("\nNew song tags: ")  # Inquiring the user about the new tags
-
-        cursor.execute("UPDATE media SET tags = " + "\"" + new_song_tags + "\"" + " WHERE id = " + str(entry_id[0]))
-        connection.commit()  # Writing the changes to the database
-
-        print("\nSong tags updated successfully.")
-
-    print("\nConfiguration completed.")
-
-
-def display_media_cli():
-
-    """
-        Dedicated method for displaying the media list in command-line interfaces. On each line, the output displays
-        one item from the media list, followed by its ID in the database. The algorithm only displays media items
-        from the current media folder.
-
-        :return: None
-    """
-
-    cursor = connection.cursor()
-
-    # Parsing the entire database and displaying every record that matches the current media folder
-    cursor.execute("SELECT COUNT(*) FROM media")
-
-    number_of_entries = cursor.fetchone()  # This variable will store the amount of records in the database
-
-    for i in range(number_of_entries[0]):
-        cursor.execute("SELECT full_path FROM media WHERE id = " + str(i + 1))
-        entry_path = cursor.fetchone()  # This variable will store the path of the currently selected item
-
-        # Checking if the currently selected item from the database is located in the media folder
-        if (os.path.dirname(entry_path[0])) == config_var['MEDIA FOLDER']['folder']:
-            print("\n" + os.path.basename(entry_path[0]) + " || ID: " + str(i + 1))
-
-    cursor.close()
-
-
-def generate_savelist_cli(sys_arguments):
-    """
-        Creates a .zip file using the contents specified by the user in the entry fields. The .zip file is placed
-        in the media folder. The algorithm attempts to create the intersection of each SQL result from the provided
-        tags, in order for the final resulted list to contain only the media files that match every criterion
-        specified by the user.
-
-        :param sys_arguments: Arguments passed at the command line.
-        :return: None
-    """
-
-    cursor = connection.cursor()
-
-    # The arrays storing the results of the SQL entries for each of the entries' contents
-    valid_title_files = []
-    valid_artist_files = []
-    valid_album_files = []
-    valid_release_year_files = []
-    valid_tags_files = []
-
-    # Creating the archive file using the name provided in the archive entry
-    with zipfile.ZipFile(media_folder + "/" + sys_arguments[2] + '.zip', 'w') as savelist_zip:
-        for index in range(len(sys_arguments) - 3):
-            if sys_arguments[index + 3].startswith("title="):  # The user has specified a custom criterion for the title
-                cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + sys_arguments[index+3][6:]
-                               + "\"" + ") > 0")
-
-                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                    valid_title_files.append(i[0])
-
-            # The user has specified a custom criterion for the artist
-            if sys_arguments[index + 3].startswith("artist="):
-                cursor.execute("SELECT full_path FROM media WHERE artist = " + "\"" + sys_arguments[index+3][7:] + "\"")
-
-                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                    valid_artist_files.append(i[0])
-
-            if sys_arguments[index + 3].startswith("album="):  # The user has specified a custom criterion for the album
-                cursor.execute("SELECT full_path FROM media WHERE album = " + "\"" + sys_arguments[index+3][6:] + "\"")
-
-                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                    valid_album_files.append(i[0])
-
-            # The user has specified a custom criterion for the release year
-            if sys_arguments[index + 3].startswith("release_year="):
-                cursor.execute("SELECT full_path FROM media WHERE release_date = " + "\"" + sys_arguments[index+3][13:]
-                               + "\"")
-
-                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                    valid_release_year_files.append(i[0])
-
-            if sys_arguments[index + 2].startswith("tags="):  # The user has specified a custom criterion for the tags
-                cursor.execute("SELECT full_path FROM media WHERE INSTR(" + "\"" + sys_arguments[index+3][5:] + "\"" +
-                               ", tags) > 0")
-
-                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                    valid_tags_files.append(i[0])
-
-            # We are now performing intersection operation for each of the lists in order to add to the archive only
-            # the files that match every criterion passed by the user
-            files = intersection(intersection(intersection(intersection(valid_title_files, valid_artist_files),
-                                 valid_album_files), valid_release_year_files), valid_tags_files)
-
-            for index2 in files:  # Writing the suitable files to the archive
-                savelist_zip.write(index2, os.path.basename(index2))
-
-    savelist_zip.close()  # Closing the archive
-
-    print("\nArchive created successfully.")
-
-
-def search_cli(sys_arguments):
-    """
-        Searches the database for the value provided in the search box, then updates the media list to show only
-        the media files that match the value given.
-
-        :param sys_arguments: Arguments passed at the command line.
-        :return: None
-    """
-
-    cursor = connection.cursor()
-
-    # The arrays storing the results of the SQL entries for each of the entries' contents
-    valid_title_files = []
-    valid_artist_files = []
-    valid_album_files = []
-    valid_release_year_files = []
-    valid_tags_files = []
-
-    for index in range(len(sys_arguments) - 2):
-        if sys_arguments[index + 2].startswith("title="):  # The user has specified a custom criterion for the title
-            cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + sys_arguments[index + 2][6:]
-                           + "\"" + ") > 0")
-
-            for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                valid_title_files.append(i[0])
-
-        # The user has specified a custom criterion for the artist
-        if sys_arguments[index + 2].startswith("artist="):
-            cursor.execute("SELECT full_path FROM media WHERE artist = " + "\"" + sys_arguments[index + 2][7:] + "\"")
-
-            for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                valid_artist_files.append(i[0])
-
-        if sys_arguments[index + 2].startswith("album="):  # The user has specified a custom criterion for the album
-            cursor.execute("SELECT full_path FROM media WHERE album = " + "\"" + sys_arguments[index + 2][6:] + "\"")
-
-            for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                valid_album_files.append(i[0])
-
-        # The user has specified a custom criterion for the release year
-        if sys_arguments[index + 2].startswith("release_year="):
-            cursor.execute("SELECT full_path FROM media WHERE release_date = " + "\"" + sys_arguments[index + 2][13:]
-                           + "\"")
-
-            for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                valid_release_year_files.append(i[0])
-
-        if sys_arguments[index + 2].startswith("tags="):  # The user has specified a custom criterion for the tags
-            cursor.execute("SELECT full_path FROM media WHERE INSTR(" + "\"" + sys_arguments[index + 2][5:] + "\"" +
-                           ", tags) > 0")
-
-            for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
-                valid_tags_files.append(i[0])
-
-    # We are now performing intersection operation for each of the lists in order display only the files that match
-    # every criterion passed by the user
-    files = intersection(intersection(intersection(intersection(valid_title_files, valid_artist_files),
-                                                   valid_album_files), valid_release_year_files), valid_tags_files)
-
-    for i in files:
-        print("\n" + i)
-
-
-def play_media(media):
-    """
-        Plays the media file specified as parameter.
-
-        :param media: The media file to be played.
-        :return: None
-    """
-
-    full_path = os.path.join(media_folder, os.path.basename(media)).replace("\\", "/")
-
-    if full_path.endswith(".mp3"):
-        media_file = AudioSegment.from_mp3(full_path)
-        play(media_file)
     elif full_path.endswith(".wav"):
         media_file = AudioSegment.from_wav(full_path)
         play(media_file)
@@ -546,24 +359,6 @@ def resort_keys(id_value):
     cursor.close()
 
 
-def configure_media_folder(sys_arguments):
-
-    """
-        CLI-only method. Either displays the current media folder or changes it to the specified value.
-
-        :param sys_arguments: Arguments passed at the command line. Minimum 1 argument needs to be passed for this
-                              method to run. The first argument specifies the name of the command. The 2nd parameter
-                              is optional and specifies the location of the new media folder.
-        :return: None
-    """
-
-    if len(sys_arguments) == 2:  # The user is inquiring about the location of the current media folder
-        print("Media folder: " + config_var['MEDIA FOLDER']['folder'])
-
-    elif len(sys_arguments) == 3:  # The user is attempting to change the media folder
-        folder_selector(sys_arguments[2])
-
-
 def folder_selector(folder_path=None, gui_instance=None):
 
     """
@@ -577,14 +372,17 @@ def folder_selector(folder_path=None, gui_instance=None):
         :return: None
     """
 
+    global config_var
+
     if gui_instance is not None:  # The method has been fired by a GUI widget
         folder = filedialog.askdirectory()  # We will use an OS-specific dialog box call to select the media folder
 
         if folder != "":  # The user hasn't canceled the operation
             config_var.set('MEDIA FOLDER', 'folder', folder)  # Updating the value inside the configuration file
 
-            with open('config.ini', 'w') as configfile:
-                config_var.write(configfile)  # Writing the changes to the configuration file
+            with open('config.ini', 'w') as configfile_folder:
+                config_var.write(configfile_folder)  # Writing the changes to the configuration file
+                configfile_folder.close()
 
             gui_instance.display_media_folder()  # Updating the media list
 
@@ -593,10 +391,11 @@ def folder_selector(folder_path=None, gui_instance=None):
     else:  # The method has been fired by using CLI
         config_var.set('MEDIA FOLDER', 'folder', folder_path)  # Updating the value inside the configuration file
 
-        with open('config.ini', 'w') as configfile:  # Writing the changes to the configuration file
-            config_var.write(configfile)  # Writing the changes to the configuration file
+        with open('config.ini', 'w') as configfile_folder:  # Writing the changes to the configuration file
+            config_var.write(configfile_folder)  # Writing the changes to the configuration file
+            configfile_folder.close()
 
-        print("Media folder updated.")
+        print("\nMedia folder updated.")
 
 
 def intersection(list1, list2):
@@ -626,19 +425,51 @@ def intersection(list1, list2):
         return list3
 
 
+def load_cli(gui_instance):
+    gui_instance.destroy()
+
+    SongStorageCLI(1)
+
+
+def load_gui():
+
+    """
+        Loads the graphical user interface of the application.
+
+        :return: None
+    """
+
+    print("Loading graphical user interface...\n")
+    SongStorageGUI().mainloop()
+
+
 class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface to the user
     def __init__(self):
+
         super().__init__()
         self.title("Song Storage")
         self.resizable(False, False)
+        self.iconphoto(True, PhotoImage(file="Resources/Icons/AppIcon.png"))
+
+        global config_var
+
+        if config_var['RUN-MODE']['run_mode'] == "1":
+            config_var.set('RUN-MODE', 'run_mode', "0")
+
+            with open('config.ini', 'w') as configfile_gui:
+                config_var.write(configfile_gui)  # Writing the changes to the configuration file
+                configfile_gui.close()
+
+        self.gui_menu_var = StringVar(self, config_var['RUN-MODE']['run_mode'])
         
         """Declaring the variables the GUI will use"""
         self.menubar = Menu()  # The file menu where the user can specify global settings for the application
         self.filemenu = Menu(self.menubar, tearoff=0)
         self.runmode_menu = Menu(self.filemenu, tearoff=0)
-        self.runmode_menu.add_radiobutton(label="Graphical User Interface", value=0, variable=menu_var)
-        self.runmode_menu.add_radiobutton(label="Command Line Interface", value=1, variable=menu_var)
-        self.runmode_menu.add_radiobutton(label="Debugging Mode (GUI + CLI)", value=2, variable=menu_var)
+        self.runmode_menu.add_radiobutton(label="Graphical User Interface", value=0, variable=self.gui_menu_var)
+        self.runmode_menu.add_radiobutton(label="Command Line Interface", value=1, variable=self.gui_menu_var,
+                                          command=lambda gui=self: load_cli(self))
+        self.runmode_menu.add_radiobutton(label="Debugging Mode (GUI + CLI)", value=2, variable=self.gui_menu_var)
         self.filemenu.add_cascade(label="Run Mode", menu=self.runmode_menu)
         self.menubar.add_cascade(label="File", menu=self.filemenu)
 
@@ -703,6 +534,10 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         self.process_widgets()
 
         self.load_interface()
+
+        self.lift()
+
+        print("Graphical user interface loaded.")
 
     def process_widgets(self):
 
@@ -793,6 +628,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
             :return: None
         """
 
+        global config_var
+
         cursor = connection.cursor()
 
         index = 0  # Using an index to determine the correct row in which every media item needs to be placed
@@ -872,7 +709,8 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
                     # Adding the play button specific to the current media item
                     self.library_items.append(Button(path_frame_child, text="Play",
-                                                     command=lambda file_path=entry_path[0]: play_media(file_path)))
+                                                     command=lambda file_path=entry_path[0]:
+                                                     play_media(file_path, 1, self)))
                     self.library_items[-1].grid(row=index, column=2, padx=10, pady=5)
 
                     # Adding the info button specific to the current media item
@@ -1030,6 +868,7 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
         """
 
         global media_folder
+        global config_var
 
         # Updating the value of the variable storing the path to the media folder
         media_folder = config_var['MEDIA FOLDER']['folder']
@@ -1363,15 +1202,15 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
         file = filedialog.askopenfilename()
 
-        add_media(file, 0, self)  # Adding the selected media file to the list
+        if add_media(file, 0, self):  # Checking if the process of adding the media file was successful
 
-        if file:  # Checking whether the user has aborted the operation
-            # Getting the path of the file with respect to the current media folder (since the "file" variable points
-            # to the location of the source file)
-            full_path = os.path.join(media_folder, os.path.basename(file)).replace("\\", "/")
+            if file:  # Checking whether the user has aborted the operation
+                # Getting the path of the file with respect to the current media folder (since the "file" variable
+                # points to the location of the source file)
+                full_path = os.path.join(media_folder, os.path.basename(file)).replace("\\", "/")
 
-            # Whenever a media item is added, the user is automatically prompted to configure its metadata
-            self.configure_media(os.path.basename(file), full_path)
+                # Whenever a media item is added, the user is automatically prompted to configure its metadata
+                self.configure_media(os.path.basename(file), full_path)
 
     def create_savelist(self):
 
@@ -1549,58 +1388,540 @@ class SongStorageGUI(Tk):  # The GUI class responsible for showing the interface
 
 
 class SongStorageCLI:
-    def __init__(self):
+    def __init__(self, run_mode):
+        global config_var
+
+        self.run_mode = run_mode
+
+        if self.run_mode:
+            config_var.set('RUN-MODE', 'run_mode', "1")
+
+            with open('config.ini', 'w') as configfile_cli:
+                config_var.write(configfile_cli)  # Writing the changes to the configuration file
+                configfile_cli.close()
+
+            print("\nSong Storage v1.1 - 01.14.2021")
+            print("Please type a command.\nType \"help\" for a list of commands.\nType \"quit\" to exit the program. "
+                  "Type \"load_gui\" to go back to the graphical user interface version.")
+
+            while self.run_mode:
+                command = input("\nInsert command: ")
+                self.process_command(command.lower())
+
+        else:  # The user is running the application using command line arguments; no additional iterations required
+            if sys.argv[1].lower() == "add_song":
+                add_media(sys.argv[2], 0)
+
+            elif sys.argv[1].lower() == "delete_song":
+                remove_media(sys.argv[2])
+
+            elif sys.argv[1].lower() == "list_media":
+                self.display_media_cli()
+
+            elif sys.argv[1].lower() == "media_folder":
+                self.configure_media_folder(sys.argv)
+
+            elif sys.argv[1].lower() == "modify_data":
+                self.configure_media(sys.argv[2])
+
+            elif sys.argv[1].lower() == "create_save_list":
+                self.generate_savelist_cli(sys.argv)
+
+            elif sys.argv[1].lower() == "search":
+                self.search_cli(sys.argv)
+
+            elif sys.argv[1].lower() == "play":
+                play_media(sys.argv[2], 0)
+
+            elif sys.argv[1].lower() == "load_gui":
+                load_gui()
+
+            elif sys.argv[1].lower() == "help":
+                self.display_help_cli()
+
+            else:
+                print("\nUnrecognized command \"" + sys.argv[1] + "\".\n"
+                      "Use command \"Help\" for a list of available commands.")
+
+    def process_command(self, command):
+        tokenized_command = command.split()
+
+        sys_argv_emulation = tokenized_command.copy()
+        sys_argv_emulation.insert(0, "filler argument")
+
+        if tokenized_command[0] == "add_song":
+            add_media(tokenized_command[1], 0)
+
+        elif tokenized_command[0] == "delete_song":
+            remove_media(tokenized_command[1])
+
+        elif tokenized_command[0] == "list_media":
+            self.display_media_cli()
+
+        elif tokenized_command[0] == "media_folder":
+            self.configure_media_folder(sys_argv_emulation)
+
+        elif tokenized_command[0] == "modify_data":
+            self.configure_media(tokenized_command[1])
+
+        elif tokenized_command[0] == "create_save_list":
+            self.generate_savelist_cli(sys_argv_emulation)
+
+        elif tokenized_command[0] == "search":
+            self.search_cli(sys_argv_emulation)
+
+        elif tokenized_command[0] == "play":
+            play_media(tokenized_command[1], 1)
+
+        elif tokenized_command[0] == "load_gui":
+            self.run_mode = 0
+            load_gui()
+
+        elif tokenized_command[0] == "help":
+            self.display_help_cli()
+
+        elif tokenized_command[0] == "quit":
+            sys.exit()
+
+        else:
+            print("\nUnrecognized command \"" + tokenized_command[0] + "\".\n"
+                  "Use command \"Help\" for a list of available commands.")
+
+    @staticmethod
+    def display_help_cli():
+
         """
-        print("Song Storage v1.0 - 01.12.2021")
-        print("Please type a command.\nType \"help\" for a list of commands.\nType \"quit\" to exit the program. Type"
-              " \"load_gui\" to go back to the graphical user interface version.")
+            Displays a help message containing all commands of the application.
+
+            :return: None
         """
 
-        if sys.argv[1].lower() == "add_song":
-            add_media(sys.argv[2], 0)
+        print("\nAdd_song [path to song] - Adds the specified media file to the media folder (only .mp3 and .wav files "
+              "are supported).\n")
 
-        elif sys.argv[1].lower() == "remove_song":
-            remove_media(sys.argv[2])
+        print("Delete_song [ID of the song | name of the media file] - Deletes the specified media file from the media "
+              + "folder.\n")
 
-        elif sys.argv[1].lower() == "list_media":
-            display_media_cli()
+        print("List_media - Displays the entire media list located in the media folder.\n")
 
-        elif sys.argv[1].lower() == "media_folder":
-            configure_media_folder(sys.argv)
+        print("Media_folder [directory path]* - If no arguments are given, displays the current media folder. " +
+              "Otherwise, changes the media folder to the specified directory.\n")
 
-        elif sys.argv[1].lower() == "modify_data":
-            configure_media(sys.argv[2])
+        print("Modify_data [ID of the song | name of the media file] - Allows the user to modify information for the "
+              + "specified media file.\n")
 
-        elif sys.argv[1].lower() == "create_save_list":
-            generate_savelist_cli(sys.argv)
-            
-        elif sys.argv[1].lower() == "search":
-            search_cli(sys.argv)
+        print("Search [(title= | artist= | album= | release_date= | tags=)* + search query] - Searches the database " +
+              "for media files matching the search query and displays the results.\n")
 
-        elif sys.argv[1].lower() == "play":
-            play_media(sys.argv[2])
+        print("Create_save_list [archive name] [(title= | artist= | album= | release_date= | tags=)* + search query] " +
+              "- Creates an archive in the media folder containing the media files matching the search query.\n")
 
-        elif sys.argv[1].lower() == "load_gui":
-            SongStorageGUI().mainloop()
+        print("Play [ID of the song | name of the media file] - Plays the currently selected media file in the " +
+              "background.\n")
+
+        print("Load_gui - Loads the graphical user interface of the application.\n")
+
+        print("Help - Displays this help message.\n")
+
+        print("Quit - Exits the applicatin.\n")
+
+    @staticmethod
+    def configure_media(file):
+
+        """
+            This is the method used by the CLI for modifying media metadata.
+
+            :param file: The media file to be altered.
+            :return: None
+        """
+
+        global option  # Using the global variable that specifies user choice (typically "Yes" or "No" choices)
+        cursor = connection.cursor()
+
+        if file.isnumeric():  # The user has attempted to configure the media file based on its ID in the database
+            cursor.execute("SELECT full_path FROM media WHERE id = " + file)
+
+            full_path_cursor = cursor.fetchone()
+
+            if full_path_cursor is None:  # The system couldn't find the specified ID
+                print("\nError: The specified ID does not exist in the database.")
+                return
+
+            full_path = full_path_cursor[0]
+
+        else:  # The user is either using the GUI or has provided the filename as parameter
+            full_path = os.path.join(media_folder, os.path.basename(file)).replace("\\", "/")
+
+            if not path.exists(full_path):  # (CLI-only) The user has provided an invalid filename
+                print("\nError: The specified media file does not exist.")
+                return
+
+        # Processing the media file in the database
+        cursor.execute("SELECT id FROM media WHERE full_path = " + "\"" + full_path + "\"")
+
+        entry_id = cursor.fetchone()
+
+        # For each column in the database, we will present the user the current value for the media item and we will
+        # ask them if they want to update this value.
+        print("\nFilename: " + ntpath.basename(full_path) + "\nRename file? (Y/N)")  # The current full_path value
+
+        option = input()  # Getting user response
+
+        if option.lower() == "y":  # The user has responded affirmatively
+            filename = input("\nNew filename: ")  # Inquiring the user about the new filename
+
+            new_path = os.path.join(os.path.dirname(full_path), filename).replace("\\", "/")  # New filename
+            os.rename(full_path, new_path)  # Renaming the file
+
+            cursor.execute("UPDATE media SET full_path = " + "\"" + new_path + "\"" + " WHERE full_path = " + "\"" +
+                           full_path + "\"")
+            connection.commit()  # Writing the changes to the database
+
+            print("\nFile renamed successfully.")
+
+        cursor.execute("SELECT title FROM media WHERE id = " + str(entry_id[0]))
+        song_title = cursor.fetchone()
+
+        print("\nSong title: " + song_title[0] + "\nRename song? (Y/N)")  # The current title value
+
+        option = input()  # Getting user response
+
+        if option.lower() == "y":  # The user has responded affirmatively
+            new_song_title = input("\nNew song title: ")  # Inquiring the user about the new song title
+
+            cursor.execute(
+                "UPDATE media SET title = " + "\"" + new_song_title + "\"" + " WHERE id = " + str(entry_id[0]))
+            connection.commit()  # Writing the changes to the database
+
+            print("\nSong title updated successfully.")
+
+        cursor.execute("SELECT artist FROM media WHERE id = " + str(entry_id[0]))
+        song_artist = cursor.fetchone()
+
+        print("\nArtist: " + song_artist[0] + "\nRename artist? (Y/N)")  # The current artist value
+
+        option = input()  # Getting user response
+
+        if option.lower() == "y":  # The user has responded affirmatively
+            new_song_artist = input("\nNew artist: ")  # Inquiring the user about the new artist
+
+            cursor.execute(
+                "UPDATE media SET artist = " + "\"" + new_song_artist + "\"" + " WHERE id = " + str(entry_id[0]))
+            connection.commit()  # Writing the changes to the database
+
+            print("\nArtist updated successfully.")
+
+        cursor.execute("SELECT album FROM media WHERE id = " + str(entry_id[0]))
+        song_album = cursor.fetchone()
+
+        print("\nAlbum: " + song_album[0] + "\nRename album? (Y/N)")  # The current album value
+
+        option = input()  # Getting user response
+
+        if option.lower() == "y":  # The user has responded affirmatively
+            new_song_album = input("\nNew album: ")  # Inquiring the user about the new album
+
+            cursor.execute(
+                "UPDATE media SET album = " + "\"" + new_song_album + "\"" + " WHERE id = " + str(entry_id[0]))
+            connection.commit()  # Writing the changes to the database
+
+            print("\nAlbum updated successfully.")
+
+        cursor.execute("SELECT release_date FROM media WHERE id = " + str(entry_id[0]))
+        song_release_date = cursor.fetchone()
+
+        print("\nRelease date: " + song_release_date[
+            0] + "\nChange release date? (Y/N)")  # The current release date value
+
+        option = input()  # Getting user response
+
+        if option.lower() == "y":  # The user has responded affirmatively
+            new_release_date = input("\nNew release date: ")  # Inquiring the user about the new release date
+
+            cursor.execute("UPDATE media SET release_date = " + "\"" + new_release_date + "\"" + " WHERE id = " +
+                           str(entry_id[0]))
+            connection.commit()  # Writing the changes to the database
+
+            print("\nSong release date updated successfully.")
+
+        cursor.execute("SELECT tags FROM media WHERE id = " + str(entry_id[0]))
+        song_tags = cursor.fetchone()
+
+        print("\nSong tags: " + song_tags[0] + "\nChange tags? (Y/N)")  # The current tags value
+
+        option = input()  # Getting user response
+
+        if option.lower() == "y":  # The user has responded affirmatively
+            # Inquiring the user about the new tags
+            new_song_tags = input("\nNew song tags (separate tags by using a comma (','), whitespaces are optional): ")
+
+            cursor.execute("UPDATE media SET tags = " + "\"" + new_song_tags + "\"" + " WHERE id = " + str(entry_id[0]))
+            connection.commit()  # Writing the changes to the database
+
+            print("\nSong tags updated successfully.")
+
+        print("\nConfiguration completed.")
+
+    @staticmethod
+    def display_media_cli():
+
+        """
+            Dedicated method for displaying the media list in command-line interfaces. On each line, the output displays
+            one item from the media list, followed by its ID in the database. The algorithm only displays media items
+            from the current media folder.
+
+            :return: None
+        """
+
+        global config_var
+
+        cursor = connection.cursor()
+        count = 0  # The total amount of items displayed
+
+        # Parsing the entire database and displaying every record that matches the current media folder
+        cursor.execute("SELECT COUNT(*) FROM media")
+
+        number_of_entries = cursor.fetchone()  # This variable will store the amount of records in the database
+
+        for i in range(number_of_entries[0]):
+            cursor.execute("SELECT full_path FROM media WHERE id = " + str(i + 1))
+            entry_path = cursor.fetchone()  # This variable will store the path of the currently selected item
+
+            # Checking if the currently selected item from the database is located in the media folder
+            if (os.path.dirname(entry_path[0])) == config_var['MEDIA FOLDER']['folder']:
+                print("\n" + os.path.basename(entry_path[0]) + " || ID: " + str(i + 1))
+                count += 1
+
+        if not count:  # No items could be found
+            print("\nThere are no media files in the media folder.")
+
+        cursor.close()
+
+    @staticmethod
+    def generate_savelist_cli(sys_arguments):
+        """
+            Creates a .zip file using the contents specified by the user in the entry fields. The .zip file is placed
+            in the media folder. The algorithm attempts to create the intersection of each SQL result from the provided
+            tags, in order for the final resulted list to contain only the media files that match every criterion
+            specified by the user.
+
+            :param sys_arguments: Arguments passed at the command line.
+            :return: None
+        """
+
+        cursor = connection.cursor()
+
+        # The arrays storing the results of the SQL entries for each of the entries' contents
+        valid_title_files = []
+        valid_artist_files = []
+        valid_album_files = []
+        valid_release_year_files = []
+        valid_tags_files = []
+
+        # Creating the archive file using the name provided in the archive entry
+        with zipfile.ZipFile(media_folder + "/" + sys_arguments[2] + '.zip', 'w') as savelist_zip:
+            for index in range(len(sys_arguments) - 3):
+                if sys_arguments[index + 3].startswith(
+                        "title="):  # The user has specified a custom criterion for the title
+                    cursor.execute(
+                        "SELECT full_path FROM media WHERE INSTR(title, " + "\"" + sys_arguments[index + 3][6:]
+                        + "\"" + ") > 0")
+
+                    for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                        valid_title_files.append(i[0])
+
+                # The user has specified a custom criterion for the artist
+                if sys_arguments[index + 3].startswith("artist="):
+                    cursor.execute(
+                        "SELECT full_path FROM media WHERE INSTR(artist, " + "\"" + sys_arguments[index + 3][7:] + "\""
+                        + ") > 0")
+
+                    for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                        valid_artist_files.append(i[0])
+
+                if sys_arguments[index + 3].startswith(
+                        "album="):  # The user has specified a custom criterion for the album
+                    cursor.execute(
+                        "SELECT full_path FROM media WHERE INSTR(album, " + "\"" + sys_arguments[index + 3][6:] + "\""
+                        + ") > 0")
+
+                    for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                        valid_album_files.append(i[0])
+
+                # The user has specified a custom criterion for the release year
+                if sys_arguments[index + 3].startswith("release_year="):
+                    cursor.execute(
+                        "SELECT full_path FROM media WHERE INSTR(release_date, " + "\"" + sys_arguments[index + 3][13:]
+                        + "\") > 0")
+
+                    for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                        valid_release_year_files.append(i[0])
+
+                # The user has specified a custom criterion for the tags
+                if sys_arguments[index + 3].startswith("tags="):
+                    tags_list = sys_arguments[index + 3][5:].replace('\"', '').replace(' ', '').split(",")
+
+                    for tag in tags_list:
+                        cursor.execute("SELECT full_path FROM media WHERE INSTR(tags, \"" + tag + "\") > 0")
+
+                        for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                            valid_tags_files.append(i[0])
+
+                # We are now performing intersection operation for each of the lists in order to add to the archive only
+                # the files that match every criterion passed by the user
+                files = intersection(intersection(intersection(intersection(valid_title_files, valid_artist_files),
+                                                               valid_album_files), valid_release_year_files),
+                                     valid_tags_files)
+
+                for index2 in files:  # Writing the suitable files to the archive
+                    savelist_zip.write(index2, os.path.basename(index2))
+
+        savelist_zip.close()  # Closing the archive
+
+        print("\nArchive created successfully.")
+
+    @staticmethod
+    def configure_media_folder(arguments):
+
+        """
+            CLI-only method. Either displays the current media folder or changes it to the specified value.
+
+            :param arguments: Arguments passed at the command line. Minimum 1 argument needs to be passed for this
+                                  method to run. The first argument specifies the name of the command. The 2nd parameter
+                                  is optional and specifies the location of the new media folder.
+            :return: None
+        """
+
+        if len(arguments) == 1:  # The user is inquiring about the location of the current media folder
+            if media_folder == "":  # No media folder is configured
+                print("\nNo media folder selected. "
+                      "Use \"media_folder [path to a directory]\" command to set up a media folder.")
+
+            else:  # A media folder exists
+                print("\nMedia folder: " + media_folder)
+
+        elif len(arguments) == 2:  # The user is attempting to change the media folder
+            folder_selector(arguments[1])
+
+        else:
+            return
+
+        if len(arguments) == 2:  # The user is inquiring about the location of the current media folder
+            if media_folder == "":  # No media folder is configured
+                print("\nNo media folder selected. "
+                      "Use \"media_folder [path to a directory]\" command to set up a media folder.")
+
+            else:  # A media folder exists
+                print("\nMedia folder: " + media_folder)
+
+        elif len(arguments) == 3:  # The user is attempting to change the media folder
+            folder_selector(arguments[2])
+
+    @staticmethod
+    def search_cli(sys_arguments):
+        """
+            Searches the database for the value provided in the search box, then updates the media list to show only
+            the media files that match the value given.
+
+            :param sys_arguments: Arguments passed at the command line.
+            :return: None
+        """
+
+        cursor = connection.cursor()
+
+        # The arrays storing the results of the SQL entries for each of the entries' contents
+        valid_title_files = []
+        valid_artist_files = []
+        valid_album_files = []
+        valid_release_year_files = []
+        valid_tags_files = []
+
+        for index in range(len(sys_arguments) - 2):
+            if sys_arguments[index + 2].startswith("title="):  # The user has specified a custom criterion for the title
+                cursor.execute("SELECT full_path FROM media WHERE INSTR(title, " + "\"" + sys_arguments[index + 2][6:]
+                               + "\"" + ") > 0")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    if os.path.dirname(i[0]) == media_folder:
+                        valid_title_files.append(i[0])
+
+            # The user has specified a custom criterion for the artist
+            if sys_arguments[index + 2].startswith("artist="):
+                cursor.execute(
+                    "SELECT full_path FROM media WHERE INSTR(artist, " + "\"" + sys_arguments[index + 2][7:] +
+                    "\") > 0")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    if os.path.dirname(i[0]) == media_folder:
+                        valid_artist_files.append(i[0])
+
+            if sys_arguments[index + 2].startswith("album="):  # The user has specified a custom criterion for the album
+                cursor.execute(
+                    "SELECT full_path FROM media WHERE album = " + "\"" + sys_arguments[index + 2][6:] + "\"")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    if os.path.dirname(i[0]) == media_folder:
+                        valid_album_files.append(i[0])
+
+            # The user has specified a custom criterion for the release year
+            if sys_arguments[index + 2].startswith("release_year="):
+                cursor.execute(
+                    "SELECT full_path FROM media WHERE release_date = " + "\"" + sys_arguments[index + 2][13:]
+                    + "\"")
+
+                for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                    if os.path.dirname(i[0]) == media_folder:
+                        valid_release_year_files.append(i[0])
+
+            if sys_arguments[index + 2].startswith("tags="):  # The user has specified a custom criterion for the tags
+                tags_list = sys_arguments[index + 2][5:].replace('\"', '').replace(' ', '').split(",")
+
+                for tag in tags_list:
+                    cursor.execute("SELECT full_path FROM media WHERE INSTR(tags, \"" + tag + "\") > 0")
+
+                    for i in cursor.fetchall():  # Updating the corresponding list using the cursor result
+                        if os.path.dirname(i[0]) == media_folder:
+                            valid_tags_files.append(i[0])
+
+        # We are now performing intersection operation for each of the lists in order display only the files that match
+        # every criterion passed by the user
+        files = intersection(intersection(intersection(intersection(valid_title_files, valid_artist_files),
+                                                       valid_album_files), valid_release_year_files), valid_tags_files)
+
+        if not files:
+            print("\nNo results.")
+        else:
+            for i in files:
+                print("\n" + i)
 
 
 if __name__ == "__main__":
 
-    # Variables tasked with processing the configuration file of the application
-    config_var = configparser.ConfigParser()  # We will use a config file to store the path of the media folder
-    config_var.read('config.ini')
-
     connection = connect_to_database()
 
-    # The value that stores the path of the media folder
-    media_folder = config_var['MEDIA FOLDER']['folder']
+    if connection:  # Only continue with app execution if database connection was successful
 
-    menu_var = config_var['RUN-MODE']['run_mode']
+        # The value that stores the path of the media folder
+        media_folder = config_var['MEDIA FOLDER']['folder']
 
-    option = ""
+        # The value that stores the run mode of the application
+        menu_var = config_var['RUN-MODE']['run_mode']
 
-    if len(sys.argv) == 1:  # If no arguments or options are passed, the application will run in GUI-mode
-        SongStorageGUI().mainloop()
+        if len(sys.argv) == 1:  # If no arguments or options are passed, the application will run in loop mode
+            if menu_var == "0" or menu_var == "2":  # In these run modes, the GUI needs to be loaded
+                SongStorageGUI().mainloop()
 
-    else:  # The application will run in CLI-mode
-        SongStorageCLI()
+            elif menu_var == "1":  # The application will run in command-line interface
+                SongStorageCLI(1)
+
+            else:  # An error in the configuration file has set "run_mode" to an invalid value. Resetting it to 0
+                config_var.set("RUN-MODE", "run_mode", "0")
+
+                with open('config.ini', 'w') as configfile:
+                    config_var.write(configfile)  # Writing the changes to the configuration file
+                    configfile.close()
+
+                SongStorageGUI().mainloop()
+
+        else:  # The application will run in CLI-mode, one single iteration
+            SongStorageCLI(0)
